@@ -296,7 +296,7 @@ export default function App() {
 
   const lastPayoutDay = payouts.length ? payouts.map((p) => p.upTo).sort().slice(-1)[0] : null;
 
-  if (loading) return <Shell><div style={{ textAlign: "center", marginTop: 90, color: "#8A8272" }}>Розпалюємо вогнище…</div></Shell>;
+  if (loading) return <Shell><div style={{ textAlign: "center", marginTop: 90, color: "#EDE6D8" }}>Розпалюємо вогнище…</div></Shell>;
   if (!storageOk) return <Shell><div style={{ textAlign: "center", marginTop: 90, color: "#C96A5A", maxWidth: 420, margin: "90px auto 0" }}>
     Сховище даних недоступне в цьому режимі перегляду. Відкрий застосунок у Claude — і відмітки будуть зберігатися.
   </div></Shell>;
@@ -323,7 +323,9 @@ function Shell({ children }) {
         * { box-sizing: border-box; }
         button { cursor: pointer; font-family: inherit; }
         button:focus-visible, input:focus-visible, textarea:focus-visible { outline: 2px solid #E8763A; outline-offset: 2px; }
-        input, textarea { font-family: inherit; }
+        input, textarea, select { font-family: inherit; color: #EDE6D8; }
+        input::placeholder, textarea::placeholder { color: #BDB5A8; opacity: 1; }
+        select option { background: #1C1A17; color: #EDE6D8; }
         ::-webkit-scrollbar { height: 8px; width: 8px; }
         ::-webkit-scrollbar-thumb { background: #3A362F; border-radius: 4px; }
       `}</style>
@@ -379,7 +381,7 @@ function Login({ staff, settings, onLogin }) {
           <Brand />
         </button>
       </div>
-      <p style={{ textAlign: "center", color: "#8A8272", fontSize: 14, marginBottom: 26 }}>Хто ти? Обери себе, щоб відмічати свої зміни.</p>
+      <p style={{ textAlign: "center", color: "#EDE6D8", fontSize: 14, marginBottom: 26 }}>Хто ти? Обери себе, щоб відмічати свої зміни.</p>
 
       {Object.entries(byDept).map(([dept, people]) => (
         <div key={dept} style={{ marginBottom: 18 }}>
@@ -434,22 +436,47 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
 
       <div style={{ ...S.card, marginBottom: 12 }}>
         <div style={{ fontFamily: "'Alegreya', serif", fontSize: 22, fontWeight: 700 }}>Привіт, {person.name}!</div>
-        <div style={{ color: "#6B7F5E", fontSize: 13, fontWeight: 500, marginBottom: 16 }}>{person.dept}</div>
+        <div style={{ color: "#D5E2CE", fontSize: 13, fontWeight: 500, marginBottom: 16 }}>{person.dept}</div>
 
-        <div style={{ fontSize: 13, color: "#8A8272", marginBottom: 8 }}>Сьогодні, {pad(today.getDate())} {MONTHS_G[today.getMonth()]}:</div>
+        <div style={{ fontSize: 13, color: "#EDE6D8", marginBottom: 8 }}>Сьогодні, {pad(today.getDate())} {MONTHS_G[today.getMonth()]}:</div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button style={{ ...S.bigBtn, ...(myToday === 1 ? S.bigOn : {}) }} onClick={() => writeShift(tk, person.id, myToday === 1 ? null : 1)}>
+          <button
+            disabled={Boolean(myToday)}
+            style={{
+              ...S.bigBtn,
+              ...(myToday === 1 ? S.bigOn : {}),
+              ...(myToday ? { cursor: "not-allowed", opacity: myToday === 1 ? 1 : 0.45 } : {})
+            }}
+            onClick={() => {
+              if (!myToday) writeShift(tk, person.id, 1);
+            }}
+          >
             🔥 Повна зміна
           </button>
-          <button style={{ ...S.bigBtn, ...(myToday === 0.5 ? S.bigOn : {}) }} onClick={() => writeShift(tk, person.id, myToday === 0.5 ? null : 0.5)}>
+
+          <button
+            disabled={Boolean(myToday)}
+            style={{
+              ...S.bigBtn,
+              ...(myToday === 0.5 ? S.bigOn : {}),
+              ...(myToday ? { cursor: "not-allowed", opacity: myToday === 0.5 ? 1 : 0.45 } : {})
+            }}
+            onClick={() => {
+              if (!myToday) writeShift(tk, person.id, 0.5);
+            }}
+          >
             ◐ Пів зміни
           </button>
         </div>
-        <div style={{ fontSize: 12.5, color: "#8A8272", marginTop: 10 }}>
-          {myToday === 1 ? "Відмічено повну зміну. Гарної роботи!" : myToday === 0.5 ? "Відмічено пів зміни." : "Ще не відмічено. Натисни кнопку, коли вийдеш на зміну."}
+        <div style={{ fontSize: 12.5, color: "#EDE6D8", marginTop: 10 }}>
+          {myToday === 1
+            ? "✓ Повну зміну збережено. Змінити її може лише адміністратор."
+            : myToday === 0.5
+              ? "✓ Половину зміни збережено. Змінити її може лише адміністратор."
+              : "Обери тип зміни. Після збереження змінити вибір самостійно буде неможливо."}
         </div>
         {saveStatus?.state === "saving" && <div style={{ fontSize: 13, color: "#B8845A", marginTop: 6 }}>⏳ Зберігаю…</div>}
-        {saveStatus?.state === "saved" && <div style={{ fontSize: 13, color: "#6B7F5E", marginTop: 6, fontWeight: 600 }}>✓ Збережено — адміністратор уже бачить твою відмітку.</div>}
+        {saveStatus?.state === "saved" && <div style={{ fontSize: 13, color: "#D5E2CE", marginTop: 6, fontWeight: 600 }}>✓ Збережено — адміністратор уже бачить твою відмітку.</div>}
         {saveStatus?.state === "error" && <div style={{ fontSize: 13, color: "#C96A5A", marginTop: 6, fontWeight: 600 }}>⚠ Не вдалося зберегти. Перевір інтернет і натисни кнопку ще раз.</div>}
       </div>
 
@@ -458,7 +485,7 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
         <div style={{ ...S.card, marginBottom: 12, borderColor: "#E8763A" }}>
           <h2 style={S.h2}>Твій % з каси</h2>
           <div style={{ fontFamily: "'Alegreya', serif", fontSize: 30, fontWeight: 700, color: "#E8763A" }}>{money(myPct)}</div>
-          <div style={{ fontSize: 12.5, color: "#8A8272", marginTop: 4 }}>
+          <div style={{ fontSize: 12.5, color: "#EDE6D8", marginTop: 4 }}>
             накопичено {lastPayoutDay ? `з ${dayLabel(lastPayoutDay)} (після останньої виплати)` : "з початку роботи журналу"}
           </div>
           <div style={{ ...S.hint, marginTop: 10 }}>
@@ -477,7 +504,7 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
         {!person.rate && <div style={S.hint}>Ставку ще не задано — попроси адміністратора вказати її.</div>}
 
         <div style={{ marginTop: 10 }}>
-          <div style={{ fontSize: 12, color: "#8A8272", marginBottom: 6 }}>Твої відмітки за період:</div>
+          <div style={{ fontSize: 12, color: "#EDE6D8", marginBottom: 6 }}>Твої відмітки за період:</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
             {days.map((day) => {
               const v = shifts[day]?.[person.id];
@@ -604,7 +631,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
       <header style={S.header}>
         <div>
           <Brand />
-          <div style={{ color: "#8A8272", fontSize: 13, marginTop: 2, marginLeft: 38 }}>Кабінет адміністратора{me?.name ? ` · ${me.name}` : ""}</div>
+          <div style={{ color: "#EDE6D8", fontSize: 13, marginTop: 2, marginLeft: 38 }}>Кабінет адміністратора{me?.name ? ` · ${me.name}` : ""}</div>
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color: saveStatus?.state === "error" ? "#C96A5A" : "#5A554A" }}>
@@ -647,9 +674,9 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
             </div>
             <div style={{ fontFamily: "'Alegreya', serif", fontSize: 17, marginBottom: 4 }}>
               {DOW[selDate.getDay()]}, {pad(sd)} {MONTHS_G[sm - 1]} {sy}
-              {isToday && <span style={{ color: "#6B7F5E", fontSize: 12, fontFamily: "'Inter', sans-serif" }}> · сьогодні</span>}
+              {isToday && <span style={{ color: "#D5E2CE", fontSize: 12, fontFamily: "'Inter', sans-serif" }}> · сьогодні</span>}
               {isPast && <span style={{ color: "#B8845A", fontSize: 12, fontFamily: "'Inter', sans-serif" }}> · заднім числом</span>}
-              {isFuture && <span style={{ color: "#8A8272", fontSize: 12, fontFamily: "'Inter', sans-serif" }}> · наперед</span>}
+              {isFuture && <span style={{ color: "#EDE6D8", fontSize: 12, fontFamily: "'Inter', sans-serif" }}> · наперед</span>}
             </div>
             {isPast && lastPayoutDay && selDay <= lastPayoutDay && (
               <div style={{ ...S.hint, color: "#C96A5A", marginTop: 4, marginBottom: 8 }}>Увага: % за цей день уже виплачено ({dayLabel(lastPayoutDay)} і раніше) — зміни вплинуть лише на підрахунок змін і ставку, а не на нові відсотки.</div>
@@ -691,14 +718,14 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
               <button style={S.navBtn} onClick={() => shiftCashDay(-1)} aria-label="Попередній день">‹</button>
               <input style={{ ...S.input, colorScheme: "dark" }} type="date" value={cashDay} onChange={(e) => e.target.value && setCashDay(e.target.value)} />
               <button style={S.navBtn} onClick={() => shiftCashDay(1)} aria-label="Наступний день">›</button>
-              {cashDay === tk && <span style={{ color: "#6B7F5E", fontSize: 12 }}>сьогодні</span>}
+              {cashDay === tk && <span style={{ color: "#D5E2CE", fontSize: 12 }}>сьогодні</span>}
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, maxWidth: 460 }}>
-              <label style={{ fontSize: 12, color: "#8A8272" }}>Кухонна каса, ₴
+              <label style={{ fontSize: 12, color: "#EDE6D8" }}>Кухонна каса, ₴
                 <input style={{ ...S.input, width: "100%", marginTop: 4 }} type="number" min="0" placeholder="0"
                   value={cashDraft.kitchen} onChange={(e) => setCashDraft({ ...cashDraft, kitchen: e.target.value })} />
               </label>
-              <label style={{ fontSize: 12, color: "#8A8272" }}>Барна каса, ₴
+              <label style={{ fontSize: 12, color: "#EDE6D8" }}>Барна каса, ₴
                 <input style={{ ...S.input, width: "100%", marginTop: 4 }} type="number" min="0" placeholder="0"
                   value={cashDraft.bar} onChange={(e) => setCashDraft({ ...cashDraft, bar: e.target.value })} />
               </label>
@@ -753,7 +780,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
               <div style={{ marginTop: 16 }}>
                 <div style={S.deptLabel}>Історія виплат %</div>
                 {[...payouts].reverse().slice(0, 8).map((p) => (
-                  <div key={p.id} style={{ fontSize: 13, color: "#8A8272", padding: "4px 0" }}>
+                  <div key={p.id} style={{ fontSize: 13, color: "#EDE6D8", padding: "4px 0" }}>
                     {new Date(p.ts).toLocaleDateString("uk-UA")} · виплачено {money(p.total)} (нарахування по {dayLabel(p.upTo)})
                   </div>
                 ))}
@@ -857,7 +884,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                       <td style={{ ...S.tdPay, textAlign: "center", fontWeight: 600 }}>{fmt(s.total)}</td>
                       <td style={S.tdPay}>{p.rate ? money(p.rate) : "—"}</td>
                       <td style={{ ...S.tdPay, color: "#E8763A", fontWeight: 700 }}>{money(s.total * p.rate)}</td>
-                      <td style={{ ...S.tdPay, color: "#6B7F5E", fontWeight: 600 }}>{PCT[p.dept] ? money(accrual.perEmp[p.id] || 0) : "—"}</td>
+                      <td style={{ ...S.tdPay, color: "#D5E2CE", fontWeight: 600 }}>{PCT[p.dept] ? money(accrual.perEmp[p.id] || 0) : "—"}</td>
                     </tr>
                   );
                 }),
@@ -868,7 +895,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                 <td style={{ ...S.tdPay, textAlign: "center", fontWeight: 700 }}>{fmt(totalShifts)}</td>
                 <td />
                 <td style={{ ...S.tdPay, color: "#E8763A", fontWeight: 700, fontSize: 16 }}>{money(totalPay)}</td>
-                <td style={{ ...S.tdPay, color: "#6B7F5E", fontWeight: 700 }}>{money(accrual.total)}</td>
+                <td style={{ ...S.tdPay, color: "#D5E2CE", fontWeight: 700 }}>{money(accrual.total)}</td>
               </tr>
             </tbody>
           </table>
@@ -904,7 +931,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                   <div key={p.id} style={{ ...S.personRow, cursor: "default" }}>
                     <span>
                       <span style={{ fontWeight: 600 }}>{p.name}</span>
-                      <span style={{ color: "#8A8272", fontSize: 13 }}> · {p.rate ? `${p.rate.toLocaleString("uk-UA")} ₴/зміна` : "ставку не задано"}</span>
+                      <span style={{ color: "#EDE6D8", fontSize: 13 }}> · {p.rate ? `${p.rate.toLocaleString("uk-UA")} ₴/зміна` : "ставку не задано"}</span>
                     </span>
                     <span style={{ display: "flex", gap: 6 }}>
                       <button style={S.ghost} onClick={() => setForm({ id: p.id, name: p.name, dept: p.dept, rate: String(p.rate || "") })}>Змінити</button>
@@ -949,7 +976,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                 <div key={a.id} style={{ ...S.personRow, cursor: "default" }}>
                   <span>
                     <span style={{ fontWeight: 600 }}>{a.name}</span>
-                    <span style={{ color: "#8A8272", fontSize: 13 }}> · логін: {a.login}</span>
+                    <span style={{ color: "#EDE6D8", fontSize: 13 }}> · логін: {a.login}</span>
                   </span>
                   <span style={{ display: "flex", gap: 6 }}>
                     <button style={S.ghost} onClick={() => setAdminForm({ ...a })}>Змінити</button>
@@ -991,7 +1018,7 @@ function PeriodNav({ period, setPeriod, isCurrent }) {
       <button style={S.navBtn} onClick={() => setPeriod(prevP(period))} aria-label="Попередній період">‹</button>
       <div style={{ fontFamily: "'Alegreya', serif", fontSize: 16 }}>
         {periodLabel(period)}
-        {isCurrent && <span style={{ color: "#6B7F5E", fontSize: 12, fontFamily: "'Inter', sans-serif" }}> · поточний</span>}
+        {isCurrent && <span style={{ color: "#D5E2CE", fontSize: 12, fontFamily: "'Inter', sans-serif" }}> · поточний</span>}
       </div>
       <button style={S.navBtn} onClick={() => setPeriod(nextP(period))} aria-label="Наступний період">›</button>
     </div>
@@ -1002,7 +1029,7 @@ function Stat({ label, value, ember }) {
   return (
     <div style={{ ...S.stat, ...(ember ? { borderColor: "#E8763A" } : {}) }}>
       <div style={{ fontFamily: "'Alegreya', serif", fontSize: 22, fontWeight: 700, color: ember ? "#E8763A" : "#EDE6D8", lineHeight: 1.3 }}>{value}</div>
-      <div style={{ fontSize: 12, color: "#8A8272" }}>{label}</div>
+      <div style={{ fontSize: 12, color: "#EDE6D8" }}>{label}</div>
     </div>
   );
 }
@@ -1011,7 +1038,7 @@ function MiniStat({ label, value, ember }) {
   return (
     <div style={{ background: "#2A2722", borderRadius: 10, padding: "10px 12px", textAlign: "center" }}>
       <div style={{ fontFamily: "'Alegreya', serif", fontSize: 20, fontWeight: 700, color: ember ? "#E8763A" : "#EDE6D8" }}>{value}</div>
-      <div style={{ fontSize: 11, color: "#8A8272" }}>{label}</div>
+      <div style={{ fontSize: 11, color: "#EDE6D8" }}>{label}</div>
     </div>
   );
 }
@@ -1025,30 +1052,30 @@ const S = {
   statRow: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 10, marginBottom: 16 },
   stat: { background: "#22201C", border: "1px solid #2E2B25", borderRadius: 12, padding: "12px 16px" },
   tabs: { display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" },
-  tab: { background: "transparent", border: "1px solid #2E2B25", color: "#8A8272", borderRadius: 20, padding: "7px 16px", fontSize: 14, fontWeight: 500 },
+  tab: { background: "transparent", border: "1px solid #2E2B25", color: "#EDE6D8", borderRadius: 20, padding: "7px 16px", fontSize: 14, fontWeight: 500 },
   tabActive: { background: "#E8763A", borderColor: "#E8763A", color: "#1C1A17", fontWeight: 600 },
   card: { background: "#22201C", border: "1px solid #2E2B25", borderRadius: 14, padding: "18px 16px" },
   h2: { fontFamily: "'Alegreya', serif", fontSize: 19, fontWeight: 700, margin: "0 0 14px" },
-  hint: { color: "#8A8272", fontSize: 12.5, marginTop: 12, lineHeight: 1.5 },
-  deptLabel: { color: "#6B7F5E", fontSize: 12, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 8 },
+  hint: { color: "#EDE6D8", fontSize: 12.5, marginTop: 12, lineHeight: 1.5 },
+  deptLabel: { color: "#D5E2CE", fontSize: 12, fontWeight: 600, letterSpacing: ".08em", textTransform: "uppercase", marginBottom: 8 },
   personRow: { display: "flex", justifyContent: "space-between", alignItems: "center", background: "#2A2722", border: "1px solid #33302A", borderRadius: 10, padding: "10px 14px", fontSize: 15, gap: 8, flexWrap: "wrap" },
   personOn: { borderColor: "#E8763A", background: "#2E2620" },
-  chip: { background: "transparent", border: "1px solid #3A362F", color: "#8A8272", borderRadius: 16, padding: "5px 12px", fontSize: 13 },
+  chip: { background: "transparent", border: "1px solid #3A362F", color: "#EDE6D8", borderRadius: 16, padding: "5px 12px", fontSize: 13 },
   chipOn: { background: "#E8763A", borderColor: "#E8763A", color: "#1C1A17", fontWeight: 600 },
   loginBtn: { background: "#2A2722", border: "1px solid #3A362F", color: "#EDE6D8", borderRadius: 10, padding: "10px 18px", fontSize: 15, fontWeight: 500 },
   bigBtn: { flex: 1, minWidth: 140, background: "#2A2722", border: "1px solid #3A362F", color: "#EDE6D8", borderRadius: 12, padding: "16px 12px", fontSize: 15, fontWeight: 600 },
   bigOn: { background: "#E8763A", borderColor: "#E8763A", color: "#1C1A17" },
   table: { borderCollapse: "collapse", fontSize: 13 },
-  th: { padding: "6px 4px", fontSize: 11, fontWeight: 600, color: "#8A8272", textAlign: "center" },
+  th: { padding: "6px 4px", fontSize: 11, fontWeight: 600, color: "#EDE6D8", textAlign: "center" },
   tdName: { padding: "7px 10px 7px 4px", whiteSpace: "nowrap", fontWeight: 500, fontSize: 14 },
   tdCell: { padding: 2, textAlign: "center" },
   tdPay: { padding: "9px 6px", textAlign: "right", fontSize: 14 },
   cellBtn: { width: 20, height: 20, borderRadius: 5, border: "1px solid #3A362F" },
   primary: { background: "#E8763A", color: "#1C1A17", border: "none", borderRadius: 8, padding: "8px 16px", fontWeight: 600, fontSize: 14 },
-  ghost: { background: "transparent", color: "#8A8272", border: "1px solid #3A362F", borderRadius: 8, padding: "7px 12px", fontSize: 13 },
+  ghost: { background: "transparent", color: "#EDE6D8", border: "1px solid #3A362F", borderRadius: 8, padding: "7px 12px", fontSize: 13 },
   formBox: { display: "flex", flexDirection: "column", gap: 8, background: "#2A2722", borderRadius: 10, padding: 14, marginBottom: 14 },
   input: { background: "#1C1A17", border: "1px solid #3A362F", color: "#EDE6D8", borderRadius: 8, padding: "9px 12px", fontSize: 14 },
   textarea: { width: "100%", background: "#1C1A17", border: "1px solid #3A362F", color: "#EDE6D8", borderRadius: 8, padding: "12px", fontSize: 13.5, lineHeight: 1.6, resize: "vertical" },
   rulesText: { whiteSpace: "pre-wrap", fontFamily: "'Inter', sans-serif", fontSize: 13.5, lineHeight: 1.7, color: "#D8D0C2", margin: 0 },
-  footer: { textAlign: "center", color: "#5A554A", fontSize: 12, marginTop: 24 },
+  footer: { textAlign: "center", color: "#CFC7B9", fontSize: 12, marginTop: 24 },
 };
