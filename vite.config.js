@@ -11,13 +11,6 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         clientsClaim: true,
         skipWaiting: true,
-        cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        skipWaiting: true,
-        importScripts: ["push-handler.js"],
-        cleanupOutdatedCaches: true,
-        clientsClaim: true,
-        skipWaiting: true,
         navigateFallback: "/index.html",
         runtimeCaching: [
           {
