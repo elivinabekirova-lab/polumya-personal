@@ -27,9 +27,9 @@ const POINTS = ["Полум'я", "Підгір'я", "SPA"];
 const INTERNAL_NET_FACTOR = 0.95;
 
 const PROFESSIONS = {
-  "Полум'я": ["Бармен", "Офіціант", "Кухар", "Прибиральниця", "Посудомийниця", "Адміністратор", "Менеджер", "Інше"],
-  "Підгір'я": ["Адміністратор готелю", "Працівник рецепції", "Покоївка", "Прибиральниця", "Технічний працівник", "Охоронець", "Менеджер", "Інше"],
-  "SPA": ["Адміністратор SPA", "Масажист", "Працівник SPA", "Прибиральниця SPA", "Менеджер SPA", "Інше"],
+  "Полум'я": ["Бармен", "Офіціант", "Кухар", "Студент", "Прибиральниця", "Посудомийниця", "Адміністратор", "Менеджер", "Інше"],
+  "Підгір'я": ["Бармен"],
+  "SPA": ["Бармен"],
 };
 
 const DEFAULT_PERCENT_RULES = {
@@ -40,6 +40,7 @@ const DEFAULT_PERCENT_RULES = {
       "Бармен": { kitchen: 0.5, bar: 3 },
       "Офіціант": { kitchen: 3.5, bar: 0 },
       "Кухар": { kitchen: 1.5, bar: 0 },
+      "Студент": { kitchen: 0, bar: 0 },
       "Прибиральниця": { kitchen: 0.5, bar: 0 },
       "Посудомийниця": { kitchen: 0, bar: 0 },
       "Адміністратор": { kitchen: 0, bar: 0 },
@@ -65,6 +66,39 @@ const LEGACY_PROFESSION = {
   "Кухня": "Кухар",
   "Прибиральниці": "Прибиральниця",
   "Посудомийниці": "Посудомийниця",
+};
+
+const mergePercentRules = (saved = {}) => {
+  const result = {};
+
+  POINTS.forEach((point) => {
+    const base = DEFAULT_PERCENT_RULES[point];
+    const custom = saved?.[point] || {};
+    const migratedRules = {};
+
+    Object.entries(custom.rules || {}).forEach(([profession, rates]) => {
+      const normalizedProfession = LEGACY_PROFESSION[profession] || profession;
+      migratedRules[normalizedProfession] = {
+        ...(migratedRules[normalizedProfession] || {}),
+        ...rates,
+      };
+    });
+
+    result[point] = {
+      ...base,
+      ...custom,
+      sources: base.sources,
+      labels: { ...base.labels, ...(custom.labels || {}) },
+      rules: Object.fromEntries(
+        Object.entries(base.rules).map(([profession, rates]) => [
+          profession,
+          { ...rates, ...(migratedRules[profession] || {}) },
+        ])
+      ),
+    };
+  });
+
+  return result;
 };
 
 const normalizePerson = (person) => ({
@@ -144,7 +178,7 @@ const periodStats = (shifts, p) => {
       if (v !== 1 && v !== 0.5) return;
 
       if (!res[id]) {
-        res[id] = { full: 0, half: 0, total: 0 };
+        res[id] = { full: 0, half: 0, training: 0, total: 0 };
       }
 
       if (v === 0.5) {
@@ -310,7 +344,7 @@ export default function App() {
       setRules((await sGet(K_RULES, true)) || DEFAULT_RULES);
       let se = (await sGet(K_SET, true)) || {};
       if (!se.admins || !se.admins.length) se = { ...se, admins: DEFAULT_ADMINS };
-      if (!se.percentRules) se = { ...se, percentRules: DEFAULT_PERCENT_RULES };
+      se = { ...se, percentRules: mergePercentRules(se.percentRules) };
       await sSet(K_SET, se, true);
       setSettings(se);
       const saved = await sGet(K_ME, false);
@@ -332,7 +366,7 @@ export default function App() {
     if (c) setCash(c);
     if (po) setPayouts(po);
     if (ru) setRules(ru);
-    if (se) setSettings(se);
+    if (se) setSettings({ ...se, percentRules: mergePercentRules(se.percentRules) });
     setLastSync(new Date());
   };
   useEffect(() => {
@@ -343,7 +377,14 @@ export default function App() {
   }, []);
 
   const saveStaff = (list) => { setStaff(list); sSet(K_STAFF, list, true); };
-  const saveSettings = (s) => { setSettings(s); sSet(K_SET, s, true); };
+  const saveSettings = (nextSettings) => {
+    const normalized = {
+      ...nextSettings,
+      percentRules: mergePercentRules(nextSettings.percentRules),
+    };
+    setSettings(normalized);
+    return sSet(K_SET, normalized, true);
+  };
   const saveRules = (r) => { setRules(r); sSet(K_RULES, r, true); };
   const login = (session) => { setMe(session); sSet(K_ME, session, false); };
   const logout = () => { setMe(null); sSet(K_ME, null, false); };
@@ -373,28 +414,63 @@ export default function App() {
   const writeCash = async (day, entry, point = "Полум'я") => {
     pendingRef.current += 1;
     setSaveStatus({ state: "saving" });
-    const apply = (src) => {
+
+    const normalizedEntry = Object.fromEntries(
+      Object.entries(entry)
+        .filter(([key]) => key !== "waiters")
+        .map(([key, value]) => [key, Math.max(0, Number(value) || 0)])
+    );
+
+    if (entry.waiters && typeof entry.waiters === "object") {
+      normalizedEntry.waiters = Object.fromEntries(
+        Object.entries(entry.waiters)
+          .map(([employeeId, value]) => [employeeId, Math.max(0, Number(value) || 0)])
+          .filter(([, value]) => value > 0)
+      );
+    }
+
+    const apply = (src = {}) => {
       const next = { ...src };
       const dayRecord = { ...(next[day] || {}) };
+
+      // Підтримка старого формату каси Полум’я.
       if (dayRecord.kitchen !== undefined || dayRecord.bar !== undefined) {
-        dayRecord["Полум'я"] = { kitchen: Number(dayRecord.kitchen) || 0, bar: Number(dayRecord.bar) || 0 };
+        dayRecord["Полум'я"] = {
+          kitchen: Number(dayRecord.kitchen) || 0,
+          bar: Number(dayRecord.bar) || 0,
+        };
         delete dayRecord.kitchen;
         delete dayRecord.bar;
       }
-      const hasValue = Object.values(entry).some((value) => Number(value) > 0);
-      if (hasValue) dayRecord[point] = entry;
+
+      const hasValue = Object.entries(normalizedEntry).some(([key, value]) =>
+        key === "waiters" ? Object.keys(value || {}).length > 0 : Number(value) > 0
+      );
+      if (hasValue) dayRecord[point] = normalizedEntry;
       else delete dayRecord[point];
+
       if (Object.keys(dayRecord).length) next[day] = dayRecord;
       else delete next[day];
+
       return next;
     };
+
+    // Одразу показуємо рядок і перераховані відсотки на екрані.
     setCash((prev) => apply(prev));
+
     const latest = await sGet(K_CASH, true);
-    const merged = apply(latest || cashRef.current);
+    const merged = apply(latest || cashRef.current || {});
     const ok = await sSet(K_CASH, merged, true);
-    if (ok) setCash(merged);
+
+    if (ok) {
+      setCash(merged);
+      cashRef.current = merged;
+      setLastSync(new Date());
+    }
+
     setSaveStatus({ state: ok ? "saved" : "error" });
     pendingRef.current -= 1;
+    return ok;
   };
   const addPayout = async (rec) => {
     const latest = await sGet(K_PAYOUTS, true);
@@ -704,6 +780,24 @@ function EmployeeView({ person, shifts, cash, staff, rules, percentRules, lastPa
             disabled={hasTodayChoice}
             style={{
               ...S.bigBtn,
+              ...(myToday === "training"
+                ? { background: "#6B7F5E", borderColor: "#DCEAD4", color: "#FFFFFF" }
+                : {}),
+              ...(hasTodayChoice
+                ? { cursor: "not-allowed", opacity: myToday === "training" ? 1 : 0.45 }
+                : {})
+            }}
+            onClick={() => {
+              if (!hasTodayChoice) writeShift(tk, person.id, "training");
+            }}
+          >
+            🎓 Стажування
+          </button>
+
+          <button
+            disabled={hasTodayChoice}
+            style={{
+              ...S.bigBtn,
               ...(myToday === "off"
                 ? { background: "#4A4640", borderColor: "#D8D0C2", color: "#FFFFFF" }
                 : {}),
@@ -724,9 +818,11 @@ function EmployeeView({ person, shifts, cash, staff, rules, percentRules, lastPa
             ? "✓ Повну зміну збережено. Змінити її може лише адміністратор."
             : myToday === 0.5
               ? "✓ Половину зміни збережено. Змінити її може лише адміністратор."
-              : myToday === "off"
-                ? "✓ Вихідний збережено. Змінити його може лише адміністратор."
-                : "Обери: повна зміна, пів зміни або вихідний. Після збереження змінити вибір самостійно буде неможливо."}
+              : myToday === "training"
+                ? "✓ Стажування збережено. Змінити його може лише адміністратор."
+                : myToday === "off"
+                  ? "✓ Вихідний збережено. Змінити його може лише адміністратор."
+                  : "Обери: повна зміна, пів зміни, стажування або вихідний. Після збереження змінити вибір самостійно буде неможливо."}
         </div>
 
         {saveStatus?.state === "saving" && (
@@ -841,8 +937,9 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
   const [adminForm, setAdminForm] = useState(null); // null | {id?, name, login, pass}
   const [cashDay, setCashDay] = useState(() => dk(today));
   const [cashPoint, setCashPoint] = useState("Полум'я");
-  const [cashDraft, setCashDraft] = useState({ kitchen: "", bar: "", total: "" });
-  const [percentRulesDraft, setPercentRulesDraft] = useState(settings.percentRules || DEFAULT_PERCENT_RULES);
+  const [cashDraft, setCashDraft] = useState({ kitchen: "", bar: "", total: "", waiters: {} });
+  const [percentRulesDraft, setPercentRulesDraft] = useState(() => mergePercentRules(settings.percentRules));
+  const [cashMessage, setCashMessage] = useState("");
   const [rulesDraft, setRulesDraft] = useState(rules);
   const cur = periodOf(today);
   const tk = dk(today);
@@ -853,11 +950,12 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
       kitchen: c.kitchen ? String(c.kitchen) : "",
       bar: c.bar ? String(c.bar) : "",
       total: c.total ? String(c.total) : "",
+      waiters: Object.fromEntries(Object.entries(c.waiters || {}).map(([id, value]) => [id, String(value)])),
     });
   }, [cashDay, cashPoint, cash]);
 
   useEffect(() => {
-    setPercentRulesDraft(settings.percentRules || DEFAULT_PERCENT_RULES);
+    setPercentRulesDraft(mergePercentRules(settings.percentRules));
   }, [settings.percentRules]);
 
   const byDept = useMemo(() => {
@@ -871,7 +969,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
   const totalPay = staff.reduce((s, p) => s + (pStats[p.id]?.total || 0) * p.rate, 0);
 
   const accrual = useMemo(
-    () => percentAccrual(staff, shifts, cash, lastPayoutDay, settings.percentRules || DEFAULT_PERCENT_RULES),
+    () => percentAccrual(staff, shifts, cash, lastPayoutDay, mergePercentRules(settings.percentRules)),
     [staff, shifts, cash, lastPayoutDay, settings.percentRules]
   );
 
@@ -885,8 +983,10 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
         : v === 1
           ? 0.5
           : v === 0.5
-            ? "off"
-            : null
+            ? "training"
+            : v === "training"
+              ? "off"
+              : null
     );
   };
 
@@ -952,7 +1052,94 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
     setCashDay(dk(new Date(y, m - 1, d + dir)));
   };
 
-  const recentCashDays = Object.keys(cash).sort().reverse().slice(0, 10);
+  const pointCashRows = useMemo(() => {
+    const normalizedRules = mergePercentRules(settings.percentRules);
+
+    return Object.keys(cash)
+      .sort()
+      .reverse()
+      .map((day) => {
+        const entry = getPointCash(cash, day, cashPoint);
+        const hasCash = Object.values(entry || {}).some((value) => Number(value) > 0);
+        if (!hasCash) return null;
+
+        const dailyCash = { [day]: { [cashPoint]: entry } };
+        const dailyAccrual = percentAccrual(
+          staff,
+          shifts,
+          dailyCash,
+          null,
+          normalizedRules
+        );
+
+        return {
+          day,
+          entry,
+          distributed: dailyAccrual.byPoint?.[cashPoint]?.total || 0,
+          undistributed: dailyAccrual.byPoint?.[cashPoint]?.undistributed || 0,
+        };
+      })
+      .filter(Boolean);
+  }, [cash, cashPoint, staff, shifts, settings.percentRules]);
+
+  const currentPointAccrual = accrual.byPoint?.[cashPoint] || {
+    total: 0,
+    undistributed: 0,
+    perEmp: {},
+  };
+  const waiters = useMemo(
+    () => staff.map(normalizePerson).filter((person) => person.point === "Полум'я" && person.profession === "Офіціант"),
+    [staff]
+  );
+
+  const monthlyCashReport = useMemo(() => {
+    const rows = {};
+    POINTS.forEach((point) => {
+      rows[point] = { kitchen: 0, bar: 0, total: 0, overall: 0 };
+    });
+
+    Object.entries(cash).forEach(([day, record]) => {
+      if (!day.startsWith(mPrefix)) return;
+      POINTS.forEach((point) => {
+        const entry = getPointCash(cash, day, point);
+        rows[point].kitchen += Number(entry.kitchen) || 0;
+        rows[point].bar += Number(entry.bar) || 0;
+        rows[point].total += Number(entry.total) || 0;
+        rows[point].overall += (Number(entry.kitchen) || 0) + (Number(entry.bar) || 0) + (Number(entry.total) || 0);
+      });
+    });
+    return rows;
+  }, [cash, mPrefix]);
+
+  const monthlyWaiterReport = useMemo(() => {
+    const totals = Object.fromEntries(waiters.map((person) => [person.id, 0]));
+    Object.entries(cash).forEach(([day]) => {
+      if (!day.startsWith(mPrefix)) return;
+      const entry = getPointCash(cash, day, "Полум'я");
+      Object.entries(entry.waiters || {}).forEach(([id, value]) => {
+        totals[id] = (totals[id] || 0) + (Number(value) || 0);
+      });
+    });
+    return waiters
+      .map((person) => ({ ...person, cashTotal: totals[person.id] || 0 }))
+      .sort((a, b) => b.cashTotal - a.cashTotal);
+  }, [cash, mPrefix, waiters]);
+
+  const bestWaiter = monthlyWaiterReport.find((person) => person.cashTotal > 0) || null;
+
+  const monthlyFilteredCash = useMemo(
+    () => Object.fromEntries(Object.entries(cash).filter(([day]) => day.startsWith(mPrefix))),
+    [cash, mPrefix]
+  );
+
+  const monthlyAccrual = useMemo(
+    () => percentAccrual(staff, shifts, monthlyFilteredCash, null, mergePercentRules(settings.percentRules)),
+    [staff, shifts, monthlyFilteredCash, settings.percentRules]
+  );
+
+  const monthlyPayroll = useMemo(() => {
+    return staff.reduce((sum, person) => sum + monthTotal(person.id) * (Number(person.rate) || 0), 0);
+  }, [staff, shifts, mPrefix]);
 
   return (
     <div style={{ maxWidth: 1080, margin: "0 auto" }}>
@@ -977,7 +1164,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
       </div>
 
       <nav style={S.tabs}>
-        {[["today", "День"], ["cash", "Каса та %"], ["grid", "Табель"], ["pay", "Зарплата"], ["staff", "Персонал"], ["rules", "Правила"]].map(([k, l]) => (
+        {[["today", "День"], ["cash", "Каса та %"], ["grid", "Табель"], ["pay", "Зарплата"], ["finance", "Фінзвіт"], ["staff", "Персонал"], ["rules", "Правила"]].map(([k, l]) => (
           <button key={k} onClick={() => setTab(k)} style={{ ...S.tab, ...(tab === k ? S.tabActive : {}) }}>{l}</button>
         ))}
       </nav>
@@ -1056,6 +1243,16 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                           <button
                             style={{
                               ...S.chip,
+                              ...(v === "training" ? { background: "#6B7F5E", borderColor: "#DCEAD4", color: "#FFFFFF" } : {})
+                            }}
+                            onClick={() => writeShift(selDay, p.id, v === "training" ? null : "training")}
+                          >
+                            Стажування
+                          </button>
+
+                          <button
+                            style={{
+                              ...S.chip,
                               ...(v === "off"
                                 ? {
                                     background: "#4A4640",
@@ -1120,15 +1317,97 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
               </label>
             )}
 
-            <button style={{ ...S.primary, marginTop: 12 }} onClick={() => writeCash(
-              cashDay,
-              cashPoint === "Полум'я"
-                ? { kitchen: Number(cashDraft.kitchen) || 0, bar: Number(cashDraft.bar) || 0 }
-                : { total: Number(cashDraft.total) || 0 },
-              cashPoint
-            )}>
-              Зберегти касу · {cashPoint}
+            {cashPoint === "Полум'я" && waiters.length > 0 && (
+              <div style={{ marginTop: 16 }}>
+                <div style={S.deptLabel}>Особиста каса офіціантів</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 8 }}>
+                  {waiters.map((person) => (
+                    <label key={person.id} style={S.fieldLabel}>
+                      {person.name}, ₴
+                      <input
+                        style={{ ...S.input, width: "100%", marginTop: 4 }}
+                        type="number"
+                        min="0"
+                        value={cashDraft.waiters?.[person.id] || ""}
+                        onChange={(e) => setCashDraft({
+                          ...cashDraft,
+                          waiters: { ...(cashDraft.waiters || {}), [person.id]: e.target.value }
+                        })}
+                      />
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            <button
+              style={{ ...S.primary, marginTop: 12 }}
+              disabled={saveStatus?.state === "saving"}
+              onClick={async () => {
+                setCashMessage("");
+                const ok = await writeCash(
+                  cashDay,
+                  cashPoint === "Полум'я"
+                    ? {
+                        kitchen: Number(cashDraft.kitchen) || 0,
+                        bar: Number(cashDraft.bar) || 0,
+                        waiters: cashDraft.waiters || {},
+                      }
+                    : { total: Number(cashDraft.total) || 0 },
+                  cashPoint
+                );
+
+                setCashMessage(
+                  ok
+                    ? `✓ Касу за ${dayLabel(cashDay)} збережено. Відсотки перераховано автоматично.`
+                    : "⚠ Касу не вдалося зберегти. Перевір підключення та спробуй ще раз."
+                );
+              }}
+            >
+              {saveStatus?.state === "saving" ? "Зберігаю…" : `Зберегти касу · ${cashPoint}`}
             </button>
+
+            {cashMessage && (
+              <div style={{
+                ...S.hint,
+                color: cashMessage.startsWith("✓") ? "#DCEAD4" : "#FFD4CB",
+                fontWeight: 600,
+              }}>
+                {cashMessage}
+              </div>
+            )}
+
+            <div style={{ marginTop: 18 }}>
+              <div style={S.deptLabel}>Внесена каса · {cashPoint}</div>
+
+              {pointCashRows.length === 0 ? (
+                <div style={S.hint}>Ще немає внесених кас для цієї точки.</div>
+              ) : (
+                pointCashRows.map(({ day, entry, distributed, undistributed }) => (
+                  <div key={`${cashPoint}-${day}`} style={{ ...S.personRow, marginBottom: 8 }}>
+                    <div>
+                      <strong>{dayLabel(day)}</strong>
+                      <div style={{ color: "#F5EFE5", fontSize: 13, marginTop: 4 }}>
+                        {cashPoint === "Полум'я"
+                          ? `Кухня: ${money(Number(entry.kitchen) || 0)} · Бар: ${money(Number(entry.bar) || 0)}${Object.keys(entry.waiters || {}).length ? ` · Офіціанти: ${money(Object.values(entry.waiters).reduce((sum, value) => sum + (Number(value) || 0), 0))}` : ""}`
+                          : `Каса: ${money(Number(entry.total) || 0)}`}
+                      </div>
+                    </div>
+
+                    <div style={{ textAlign: "right" }}>
+                      <div style={{ color: "#E8763A", fontWeight: 700 }}>
+                        % розподілено: {money(distributed)}
+                      </div>
+                      {undistributed > 0 && (
+                        <div style={{ color: "#FFD4CB", fontSize: 12, marginTop: 4 }}>
+                          Не розподілено: {money(undistributed)} — перевір зміни працівників
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
           </div>
 
           <div style={{ ...S.card, marginBottom: 12 }}>
@@ -1166,7 +1445,12 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
 
           <div style={S.card}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-              <h2 style={{ ...S.h2, margin: 0 }}>Накопичені % · {cashPoint}</h2>
+              <div>
+                <h2 style={{ ...S.h2, margin: 0 }}>Накопичені % · {cashPoint}</h2>
+                <div style={{ color: "#E8763A", fontWeight: 700, marginTop: 5 }}>
+                  Разом по точці: {money(currentPointAccrual.total)}
+                </div>
+              </div>
               <button style={{ ...S.primary, background: "#6B7F5E", color: "#FFFFFF" }} onClick={doPayout}>
                 💸 Виплатити всі % · {money(accrual.total)}
               </button>
@@ -1174,7 +1458,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
             {staff.map(normalizePerson).filter((person) => person.point === cashPoint).map((person) => (
               <div key={person.id} style={S.lineRow}>
                 <span>{person.name}<small style={{ display: "block", color: "#EDE6D8" }}>{person.profession}</small></span>
-                <strong style={{ color: "#E8763A" }}>{money(accrual.perEmp[person.id] || 0)}</strong>
+                <strong style={{ color: "#E8763A" }}>{money(currentPointAccrual.perEmp[person.id] || 0)}</strong>
               </div>
             ))}
           </div>
@@ -1230,8 +1514,10 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                                     ? "#E8763A"
                                     : v === 0.5
                                       ? "linear-gradient(135deg,#E8763A 50%,#2A2722 50%)"
-                                      : v === "off"
-                                        ? "#6A655D"
+                                      : v === "training"
+                                        ? "#6B7F5E"
+                                        : v === "off"
+                                          ? "#6A655D"
                                         : "#2A2722",
                                 boxShadow: v ? "0 0 6px rgba(232,118,58,.4)" : "none" }} />
                           </td>
@@ -1244,7 +1530,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
               </tbody>
             </table>
           </div>
-          <p style={S.hint}>Клік по клітинці: повна → ½ → порожньо. Пунктир після 6-го та 20-го — межі зарплатних періодів.</p>
+          <p style={S.hint}>Клік по клітинці: повна → ½ → стажування → вихідний → порожньо. Пунктир після 6-го та 20-го — межі зарплатних періодів.</p>
         </div>
       )}
 
@@ -1297,6 +1583,70 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
               </tr>
             </tbody>
           </table>
+        </div>
+      )}
+
+      {/* ── Фінансовий звіт ── */}
+      {tab === "finance" && (
+        <div style={S.card}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 14 }}>
+            <h2 style={{ ...S.h2, margin: 0 }}>Фінансовий звіт за місяць</h2>
+            <div style={S.monthNav}>
+              <button style={S.navBtn} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}>‹</button>
+              <div style={S.monthLabel}>{MONTHS[month.getMonth()]} {month.getFullYear()}</div>
+              <button style={S.navBtn} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>›</button>
+            </div>
+          </div>
+
+          <div style={S.statRow}>
+            <Stat label="Каса всіх об’єктів" value={money(Object.values(monthlyCashReport).reduce((sum, row) => sum + row.overall, 0))} ember />
+            <Stat label="Фонд ставок за місяць" value={money(monthlyPayroll)} />
+            <Stat label="Нараховано % за місяць" value={money(monthlyAccrual.total)} />
+          </div>
+
+          {bestWaiter && (
+            <div style={{ ...S.card, marginBottom: 14, borderColor: "#E8763A" }}>
+              <div style={S.deptLabel}>Найкращий офіціант місяця</div>
+              <div style={{ fontFamily: "'Alegreya', serif", fontSize: 24, fontWeight: 700 }}>{bestWaiter.name}</div>
+              <div style={{ color: "#E8763A", fontWeight: 700, marginTop: 4 }}>Особиста каса: {money(bestWaiter.cashTotal)}</div>
+            </div>
+          )}
+
+          <div style={{ overflowX: "auto", marginBottom: 18 }}>
+            <table style={{ ...S.table, width: "100%" }}>
+              <thead><tr><th style={{ ...S.th, textAlign: "left" }}>Об’єкт</th><th style={S.th}>Кухня</th><th style={S.th}>Бар</th><th style={S.th}>Загальна</th><th style={S.th}>Разом</th><th style={S.th}>%</th></tr></thead>
+              <tbody>
+                {POINTS.map((point) => (
+                  <tr key={point} style={{ borderTop: "1px solid #2E2B25" }}>
+                    <td style={S.tdName}>{point}</td>
+                    <td style={S.tdPay}>{money(monthlyCashReport[point].kitchen)}</td>
+                    <td style={S.tdPay}>{money(monthlyCashReport[point].bar)}</td>
+                    <td style={S.tdPay}>{money(monthlyCashReport[point].total)}</td>
+                    <td style={{ ...S.tdPay, color: "#E8763A", fontWeight: 700 }}>{money(monthlyCashReport[point].overall)}</td>
+                    <td style={S.tdPay}>{money(monthlyAccrual.byPoint?.[point]?.total || 0)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          <div style={{ ...S.card, marginBottom: 14 }}>
+            <h2 style={S.h2}>Підсумки Полум’я</h2>
+            <div style={S.statRow}>
+              <Stat label="Кухня за всі дні" value={money(monthlyCashReport["Полум'я"].kitchen)} />
+              <Stat label="Бар за всі дні" value={money(monthlyCashReport["Полум'я"].bar)} />
+            </div>
+          </div>
+
+          <div style={{ ...S.card }}>
+            <h2 style={S.h2}>Каса кожного офіціанта</h2>
+            {monthlyWaiterReport.length === 0 ? <div style={S.hint}>Офіціантів ще не додано.</div> : monthlyWaiterReport.map((person, index) => (
+              <div key={person.id} style={S.lineRow}>
+                <span>{index + 1}. {person.name}</span>
+                <strong style={{ color: index === 0 && person.cashTotal > 0 ? "#E8763A" : "#F5EFE5" }}>{money(person.cashTotal)}</strong>
+              </div>
+            ))}
+          </div>
         </div>
       )}
 
