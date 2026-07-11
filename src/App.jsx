@@ -198,8 +198,9 @@ const periodStats = (shifts, p) => {
 };
 
 // ── особистий %: накопичення від дня після afterDay і до сьогодні ──
-// Пул відділу за день = (кухня×% + бар×%) × 0,95, ділиться між людьми
-// відділу на зміні того дня пропорційно до зміни (повна 1, половина 0,5).
+// Кухня, бар і прибирання рахуються за правилами точки.
+// Офіціант отримує свій % тільки від власної внесеної каси — без поділу між офіціантами.
+// Із чистого офіціантського фонду окремо відраховуються частки бару та прибирання.
 const getPointCash = (cash, day, point) => {
   const record = cash[day] || {};
   if (point === "Полум'я" && (record.kitchen !== undefined || record.bar !== undefined)) {
@@ -244,6 +245,30 @@ const percentAccrual = (staff, shifts, cash, afterDay, percentRules = DEFAULT_PE
     });
   };
 
+  const creditEmployeeDirectly = (point, day, employeeId, profession, amount) => {
+    if (amount <= 0) return;
+
+    byPoint[point] ||= { total: 0, undistributed: 0, perEmp: {} };
+
+    const person = normalizedStaff.find((employee) =>
+      employee.id === employeeId &&
+      employee.point === point &&
+      employee.profession === profession
+    );
+
+    if (!person) {
+      undistributed += amount;
+      byPoint[point].undistributed += amount;
+      if (!undistributedDays.includes(day)) undistributedDays.push(day);
+      return;
+    }
+
+    perEmp[employeeId] = (perEmp[employeeId] || 0) + amount;
+    byPoint[point].perEmp[employeeId] = (byPoint[point].perEmp[employeeId] || 0) + amount;
+    byPoint[point].total += amount;
+    total += amount;
+  };
+
   Object.keys(cash).sort().forEach((day) => {
     if (afterDay && day <= afterDay) return;
 
@@ -264,22 +289,56 @@ const percentAccrual = (staff, shifts, cash, afterDay, percentRules = DEFAULT_PE
         distributePool(point, day, profession, pool);
       });
 
-      // Полум'я: фонд офіціантів рахується від загальної каси.
-      // Після внутрішнього зменшення частина фонду переходить бару та прибиранню.
+      // Полум'я: кожен офіціант отримує % лише від власної внесеної каси.
+      // Від чистого фонду кожного офіціанта окремо відраховуються частки бару та прибирання.
       if (point === "Полум'я") {
         const plan = {
           ...DEFAULT_PERCENT_RULES[point].waiterPlan,
           ...(config.waiterPlan || {}),
         };
-        const totalCash = (Number(pointCash.kitchen) || 0) + (Number(pointCash.bar) || 0);
-        const cleanWaiterFund = totalCash * (Number(plan.totalCashPercent) || 0) / 100 * INTERNAL_NET_FACTOR;
-        const barPart = cleanWaiterFund * (Number(plan.barSharePercent) || 0) / 100;
-        const cleaningPart = cleanWaiterFund * (Number(plan.cleaningSharePercent) || 0) / 100;
-        const waiterPart = Math.max(0, cleanWaiterFund - barPart - cleaningPart);
 
-        distributePool(point, day, "Офіціант", waiterPart);
-        distributePool(point, day, "Бармен", barPart);
-        distributePool(point, day, "Прибиральниця", cleaningPart);
+        let barPoolFromWaiters = 0;
+        let cleaningPoolFromWaiters = 0;
+
+        Object.entries(pointCash.waiters || {}).forEach(([waiterId, personalCash]) => {
+          const cashValue = Number(personalCash) || 0;
+          if (cashValue <= 0) return;
+
+          const cleanWaiterFund =
+            cashValue *
+            (Number(plan.totalCashPercent) || 0) /
+            100 *
+            INTERNAL_NET_FACTOR;
+
+          const barPart =
+            cleanWaiterFund *
+            (Number(plan.barSharePercent) || 0) /
+            100;
+
+          const cleaningPart =
+            cleanWaiterFund *
+            (Number(plan.cleaningSharePercent) || 0) /
+            100;
+
+          const waiterPart = Math.max(
+            0,
+            cleanWaiterFund - barPart - cleaningPart
+          );
+
+          creditEmployeeDirectly(
+            point,
+            day,
+            waiterId,
+            "Офіціант",
+            waiterPart
+          );
+
+          barPoolFromWaiters += barPart;
+          cleaningPoolFromWaiters += cleaningPart;
+        });
+
+        distributePool(point, day, "Бармен", barPoolFromWaiters);
+        distributePool(point, day, "Прибиральниця", cleaningPoolFromWaiters);
       }
     });
   });
@@ -1419,7 +1478,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                       <strong>{dayLabel(day)}</strong>
                       <div style={{ color: "#F5EFE5", fontSize: 13, marginTop: 4 }}>
                         {cashPoint === "Полум'я"
-                          ? `Кухня: ${money(Number(entry.kitchen) || 0)} · Бар: ${money(Number(entry.bar) || 0)}${Object.keys(entry.waiters || {}).length ? ` · Офіціанти: ${money(Object.values(entry.waiters).reduce((sum, value) => sum + (Number(value) || 0), 0))}` : ""}`
+                          ? `Кухня: ${money(Number(entry.kitchen) || 0)} · Бар: ${money(Number(entry.bar) || 0)}${Object.keys(entry.waiters || {}).length ? ` · Особисті каси офіціантів: ${money(Object.values(entry.waiters).reduce((sum, value) => sum + (Number(value) || 0), 0))}` : ""}`
                           : `Каса: ${money(Number(entry.total) || 0)}`}
                       </div>
                     </div>
@@ -1448,9 +1507,9 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
 
             {cashPoint === "Полум'я" && (
               <div style={{ ...S.formBox, marginBottom: 14 }}>
-                <div style={{ fontWeight: 700 }}>Фонд офіціантів від загальної каси</div>
+                <div style={{ fontWeight: 700 }}>Особистий % офіціанта від його власної каси</div>
                 <label style={S.fieldLabel}>
-                  Загальний відсоток офіціантів
+                  Відсоток кожного офіціанта від його особистої каси
                   <input
                     style={{ ...S.input, width: 100, marginLeft: 8 }}
                     type="number" min="0" step="0.1"
@@ -1504,7 +1563,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                   />
                 </label>
                 <div style={S.hint}>
-                  Після цих відрахувань залишок фонду автоматично розподіляється між офіціантами, які були на зміні.
+                  Кожен офіціант отримує залишок лише зі своєї особистої каси. Система не ділить офіціантський фонд між усіма працівниками.
                 </div>
               </div>
             )}
