@@ -9,7 +9,7 @@ import { supabase } from "./supabase.js";
 
 // ─── «Полум'я та Підгір'я» · Журнал змін v3 ───
 // Зарплата: періоди 21–06 та 07–20.
-// Особистий %: рахується щодня від кас, мінус 5% ПДВ,
+// Особистий % рахується щодня від кас,
 // ділиться між людьми відділу на зміні того дня, накопичується до виплати.
 
 const K_STAFF = "flame:staff";
@@ -23,17 +23,58 @@ const K_ME = "flame:me";           // особистий ключ — запам
 const MONTHS = ["Січень","Лютий","Березень","Квітень","Травень","Червень","Липень","Серпень","Вересень","Жовтень","Листопад","Грудень"];
 const MONTHS_G = ["січня","лютого","березня","квітня","травня","червня","липня","серпня","вересня","жовтня","листопада","грудня"];
 const DOW = ["Нд","Пн","Вт","Ср","Чт","Пт","Сб"];
-const DEPTS = ["Бар","Офіціанти","Кухня","Прибиральниці","Посудомийниці"];
+const POINTS = ["Полум'я", "Підгір'я", "SPA"];
+const INTERNAL_NET_FACTOR = 0.95;
 
-// Відсотки за відділами: скільки % кухонної та барної каси йде відділу.
-// Офіціанти: 4,5% − 0,5% (бар) − 0,5% (прибирання) = 3,5%.
-const PCT = {
-  "Бар":            { kitchen: 0.5, bar: 3 },
-  "Офіціанти":      { kitchen: 3.5, bar: 0 },
-  "Кухня":          { kitchen: 1.5, bar: 0 },
-  "Прибиральниці":  { kitchen: 0.5, bar: 0 },
+const PROFESSIONS = {
+  "Полум'я": ["Бармен", "Офіціант", "Кухар", "Прибиральниця", "Посудомийниця", "Адміністратор", "Менеджер", "Інше"],
+  "Підгір'я": ["Адміністратор готелю", "Працівник рецепції", "Покоївка", "Прибиральниця", "Технічний працівник", "Охоронець", "Менеджер", "Інше"],
+  "SPA": ["Адміністратор SPA", "Масажист", "Працівник SPA", "Прибиральниця SPA", "Менеджер SPA", "Інше"],
 };
-const VAT = 0.05; // 5% ПДВ віднімається з усіх відсотків
+
+const DEFAULT_PERCENT_RULES = {
+  "Полум'я": {
+    sources: ["kitchen", "bar"],
+    labels: { kitchen: "Кухонна каса", bar: "Барна каса" },
+    rules: {
+      "Бармен": { kitchen: 0.5, bar: 3 },
+      "Офіціант": { kitchen: 3.5, bar: 0 },
+      "Кухар": { kitchen: 1.5, bar: 0 },
+      "Прибиральниця": { kitchen: 0.5, bar: 0 },
+      "Посудомийниця": { kitchen: 0, bar: 0 },
+      "Адміністратор": { kitchen: 0, bar: 0 },
+      "Менеджер": { kitchen: 0, bar: 0 },
+      "Інше": { kitchen: 0, bar: 0 },
+    },
+  },
+  "Підгір'я": {
+    sources: ["total"],
+    labels: { total: "Каса Підгір'я" },
+    rules: Object.fromEntries(PROFESSIONS["Підгір'я"].map((profession) => [profession, { total: 0 }])),
+  },
+  "SPA": {
+    sources: ["total"],
+    labels: { total: "Каса SPA" },
+    rules: Object.fromEntries(PROFESSIONS.SPA.map((profession) => [profession, { total: 0 }])),
+  },
+};
+
+const LEGACY_PROFESSION = {
+  "Бар": "Бармен",
+  "Офіціанти": "Офіціант",
+  "Кухня": "Кухар",
+  "Прибиральниці": "Прибиральниця",
+  "Посудомийниці": "Посудомийниця",
+};
+
+const normalizePerson = (person) => ({
+  ...person,
+  point: person.point || "Полум'я",
+  profession: person.profession || LEGACY_PROFESSION[person.dept] || person.dept || "Інше",
+  dept: person.profession || LEGACY_PROFESSION[person.dept] || person.dept || "Інше",
+});
+
+const staffGroupLabel = (person) => `${person.point || "Полум'я"} · ${person.profession || LEGACY_PROFESSION[person.dept] || person.dept || "Інше"}`;
 
 // Адміністратори за замовчуванням (логіни/паролі можна змінити в «Персонал → Адміністратори»)
 const DEFAULT_ADMINS = [
@@ -121,31 +162,65 @@ const periodStats = (shifts, p) => {
 // ── особистий %: накопичення від дня після afterDay і до сьогодні ──
 // Пул відділу за день = (кухня×% + бар×%) × 0,95, ділиться між людьми
 // відділу на зміні того дня пропорційно до зміни (повна 1, половина 0,5).
-const percentAccrual = (staff, shifts, cash, afterDay) => {
+const getPointCash = (cash, day, point) => {
+  const record = cash[day] || {};
+  if (point === "Полум'я" && (record.kitchen !== undefined || record.bar !== undefined)) {
+    return { kitchen: Number(record.kitchen) || 0, bar: Number(record.bar) || 0 };
+  }
+  return record[point] || {};
+};
+
+const percentAccrual = (staff, shifts, cash, afterDay, percentRules = DEFAULT_PERCENT_RULES) => {
   const perEmp = {};
-  let total = 0, undistributed = 0;
+  const byPoint = {};
+  let total = 0;
+  let undistributed = 0;
   const undistributedDays = [];
-  Object.entries(cash).sort().forEach(([day, c]) => {
+  const normalizedStaff = staff.map(normalizePerson);
+
+  Object.keys(cash).sort().forEach((day) => {
     if (afterDay && day <= afterDay) return;
-    Object.entries(PCT).forEach(([dept, pct]) => {
-      const pool = ((c.kitchen || 0) * pct.kitchen / 100 + (c.bar || 0) * pct.bar / 100) * (1 - VAT);
-      if (pool <= 0) return;
-      const workers = staff.filter(
-        (p) =>
-          p.dept === dept &&
-          (shifts[day]?.[p.id] === 1 ||
-            shifts[day]?.[p.id] === 0.5)
-      );
-      const wsum = workers.reduce((s, p) => s + shifts[day][p.id], 0);
-      if (!wsum) { undistributed += pool; if (!undistributedDays.includes(day)) undistributedDays.push(day); return; }
-      workers.forEach((p) => {
-        const share = pool * shifts[day][p.id] / wsum;
-        perEmp[p.id] = (perEmp[p.id] || 0) + share;
-        total += share;
+
+    POINTS.forEach((point) => {
+      const config = percentRules[point] || DEFAULT_PERCENT_RULES[point];
+      const pointCash = getPointCash(cash, day, point);
+      if (!config) return;
+
+      Object.entries(config.rules || {}).forEach(([profession, rates]) => {
+        let pool = 0;
+        (config.sources || []).forEach((source) => {
+          pool += (Number(pointCash[source]) || 0) * (Number(rates[source]) || 0) / 100;
+        });
+        pool *= INTERNAL_NET_FACTOR;
+        if (pool <= 0) return;
+
+        const workers = normalizedStaff.filter((person) =>
+          person.point === point &&
+          person.profession === profession &&
+          (shifts[day]?.[person.id] === 1 || shifts[day]?.[person.id] === 0.5)
+        );
+        const weight = workers.reduce((sum, person) => sum + Number(shifts[day][person.id] || 0), 0);
+
+        byPoint[point] ||= { total: 0, undistributed: 0, perEmp: {} };
+        if (!weight) {
+          undistributed += pool;
+          byPoint[point].undistributed += pool;
+          if (!undistributedDays.includes(day)) undistributedDays.push(day);
+          return;
+        }
+
+        workers.forEach((person) => {
+          const share = pool * Number(shifts[day][person.id]) / weight;
+          perEmp[person.id] = (perEmp[person.id] || 0) + share;
+          byPoint[point].perEmp[person.id] = (byPoint[point].perEmp[person.id] || 0) + share;
+          byPoint[point].total += share;
+          total += share;
+        });
       });
     });
   });
-  return { perEmp, total, undistributed, undistributedDays };
+
+  return { perEmp, total, undistributed, undistributedDays, byPoint };
 };
 
 const sGet = async (key, shared = true) => {
@@ -205,7 +280,7 @@ export default function App() {
   const [cash, setCash] = useState({});
   const [payouts, setPayouts] = useState([]);
   const [rules, setRules] = useState(DEFAULT_RULES);
-  const [settings, setSettings] = useState({ admins: [] });
+  const [settings, setSettings] = useState({ admins: [], percentRules: DEFAULT_PERCENT_RULES });
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(true);
   const [storageOk, setStorageOk] = useState(true);
@@ -224,16 +299,19 @@ export default function App() {
       if (typeof window === "undefined") { setStorageOk(false); setLoading(false); return; }
       let st = await sGet(K_STAFF, true);
       if (!st) {
-        st = SEED.flatMap(([dept, names]) => names.map((name) => ({ id: uid(), name, dept, rate: 0 })));
+        st = SEED.flatMap(([dept, names]) => names.map((name) => normalizePerson({ id: uid(), name, dept, rate: 0 })));
         await sSet(K_STAFF, st, true);
       }
+      st = st.map(normalizePerson);
       setStaff(st);
       setShifts((await sGet(K_SHIFTS, true)) || {});
       setCash((await sGet(K_CASH, true)) || {});
       setPayouts((await sGet(K_PAYOUTS, true)) || []);
       setRules((await sGet(K_RULES, true)) || DEFAULT_RULES);
       let se = (await sGet(K_SET, true)) || {};
-      if (!se.admins || !se.admins.length) { se = { ...se, admins: DEFAULT_ADMINS }; await sSet(K_SET, se, true); }
+      if (!se.admins || !se.admins.length) se = { ...se, admins: DEFAULT_ADMINS };
+      if (!se.percentRules) se = { ...se, percentRules: DEFAULT_PERCENT_RULES };
+      await sSet(K_SET, se, true);
       setSettings(se);
       const saved = await sGet(K_ME, false);
       if (saved && ((saved.type === "admin" && se.admins.some((a) => a.id === saved.adminId)) || st.some((p) => p.id === saved.id))) setMe(saved);
@@ -249,7 +327,7 @@ export default function App() {
       sGet(K_STAFF, true), sGet(K_SHIFTS, true), sGet(K_CASH, true),
       sGet(K_PAYOUTS, true), sGet(K_RULES, true), sGet(K_SET, true),
     ]);
-    if (st) setStaff(st);
+    if (st) setStaff(st.map(normalizePerson));
     if (sh) setShifts(sh);
     if (c) setCash(c);
     if (po) setPayouts(po);
@@ -292,12 +370,22 @@ export default function App() {
     pendingRef.current -= 1;
     if (ok) setLastSync(new Date());
   };
-  const writeCash = async (day, entry) => {
+  const writeCash = async (day, entry, point = "Полум'я") => {
     pendingRef.current += 1;
     setSaveStatus({ state: "saving" });
     const apply = (src) => {
       const next = { ...src };
-      if (!entry.kitchen && !entry.bar) delete next[day]; else next[day] = entry;
+      const dayRecord = { ...(next[day] || {}) };
+      if (dayRecord.kitchen !== undefined || dayRecord.bar !== undefined) {
+        dayRecord["Полум'я"] = { kitchen: Number(dayRecord.kitchen) || 0, bar: Number(dayRecord.bar) || 0 };
+        delete dayRecord.kitchen;
+        delete dayRecord.bar;
+      }
+      const hasValue = Object.values(entry).some((value) => Number(value) > 0);
+      if (hasValue) dayRecord[point] = entry;
+      else delete dayRecord[point];
+      if (Object.keys(dayRecord).length) next[day] = dayRecord;
+      else delete next[day];
       return next;
     };
     setCash((prev) => apply(prev));
@@ -325,8 +413,8 @@ export default function App() {
   if (me.type === "emp") {
     const person = staff.find((p) => p.id === me.id);
     if (!person) { logout(); return null; }
-    return <Shell><EmployeeView person={person} shifts={shifts} cash={cash} staff={staff} rules={rules}
-      lastPayoutDay={lastPayoutDay} writeShift={writeShift} today={today} onLogout={logout}
+    return <Shell><EmployeeView person={normalizePerson(person)} shifts={shifts} cash={cash} staff={staff} rules={rules}
+      percentRules={settings.percentRules || DEFAULT_PERCENT_RULES} lastPayoutDay={lastPayoutDay} writeShift={writeShift} today={today} onLogout={logout}
       saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
   }
   return <Shell><AdminView me={me} staff={staff} shifts={shifts} cash={cash} payouts={payouts} rules={rules} settings={settings} today={today}
@@ -376,7 +464,7 @@ function Login({ staff, settings, onLogin }) {
   const [err, setErr] = useState("");
   const byDept = useMemo(() => {
     const g = {};
-    staff.forEach((p) => { (g[p.dept] = g[p.dept] || []).push(p); });
+    staff.map(normalizePerson).forEach((p) => { const key = staffGroupLabel(p); (g[key] = g[key] || []).push(p); });
     return g;
   }, [staff]);
 
@@ -540,7 +628,7 @@ function ShiftReminderControl({ person }) {
 }
 
 // ─────────────── КАБІНЕТ СПІВРОБІТНИКА ───────────────
-function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, writeShift, today, onLogout, saveStatus, lastSync, onRefresh }) {
+function EmployeeView({ person, shifts, cash, staff, rules, percentRules, lastPayoutDay, writeShift, today, onLogout, saveStatus, lastSync, onRefresh }) {
   const [period, setPeriod] = useState(() => periodOf(today));
   const cur = periodOf(today);
   const tk = dk(today);
@@ -553,11 +641,12 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
   const days = periodDates(period);
 
   const accrual = useMemo(
-    () => percentAccrual(staff, shifts, cash, lastPayoutDay),
-    [staff, shifts, cash, lastPayoutDay]
+    () => percentAccrual(staff, shifts, cash, lastPayoutDay, percentRules),
+    [staff, shifts, cash, lastPayoutDay, percentRules]
   );
   const myPct = accrual.perEmp[person.id] || 0;
-  const pct = PCT[person.dept];
+  const pointRules = (percentRules || DEFAULT_PERCENT_RULES)[person.point];
+  const pct = pointRules?.rules?.[person.profession];
 
   return (
     <div style={{ maxWidth: 560, margin: "0 auto" }}>
@@ -571,7 +660,7 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
           Привіт, {person.name}!
         </div>
         <div style={{ color: "#F5EFE5", fontSize: 13, fontWeight: 500, marginBottom: 16 }}>
-          {person.dept}
+          {person.point} · {person.profession}
         </div>
 
         <div style={{ fontSize: 13, color: "#F5EFE5", marginBottom: 8 }}>
@@ -669,10 +758,7 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
               : "з початку роботи журналу"}
           </div>
           <div style={{ ...S.hint, marginTop: 10 }}>
-            Відділ «{person.dept}»: {pct.kitchen ? `${pct.kitchen}% кухонної каси` : ""}
-            {pct.kitchen && pct.bar ? " + " : ""}
-            {pct.bar ? `${pct.bar}% барної каси` : ""}, мінус 5% ПДВ, ділиться між тими з відділу,
-            хто був на зміні того дня.
+            {person.point} · {person.profession}. Нарахування ділиться між працівниками цієї професії, які були на зміні цього дня.
           </div>
         </div>
       )}
@@ -725,7 +811,7 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
         </div>
       </div>
 
-      {person.dept === "Офіціанти" && (
+      {person.profession === "Офіціант" && (
         <div style={S.card}>
           <h2 style={S.h2}>📋 Правила закриття рахунків та каси</h2>
           <pre style={S.rulesText}>{rules}</pre>
@@ -754,19 +840,29 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
   const [form, setForm] = useState(null);
   const [adminForm, setAdminForm] = useState(null); // null | {id?, name, login, pass}
   const [cashDay, setCashDay] = useState(() => dk(today));
-  const [cashDraft, setCashDraft] = useState({ kitchen: "", bar: "" });
+  const [cashPoint, setCashPoint] = useState("Полум'я");
+  const [cashDraft, setCashDraft] = useState({ kitchen: "", bar: "", total: "" });
+  const [percentRulesDraft, setPercentRulesDraft] = useState(settings.percentRules || DEFAULT_PERCENT_RULES);
   const [rulesDraft, setRulesDraft] = useState(rules);
   const cur = periodOf(today);
   const tk = dk(today);
 
   useEffect(() => {
-    const c = cash[cashDay] || {};
-    setCashDraft({ kitchen: c.kitchen ? String(c.kitchen) : "", bar: c.bar ? String(c.bar) : "" });
-  }, [cashDay, cash]);
+    const c = getPointCash(cash, cashDay, cashPoint);
+    setCashDraft({
+      kitchen: c.kitchen ? String(c.kitchen) : "",
+      bar: c.bar ? String(c.bar) : "",
+      total: c.total ? String(c.total) : "",
+    });
+  }, [cashDay, cashPoint, cash]);
+
+  useEffect(() => {
+    setPercentRulesDraft(settings.percentRules || DEFAULT_PERCENT_RULES);
+  }, [settings.percentRules]);
 
   const byDept = useMemo(() => {
     const g = {};
-    staff.forEach((p) => { (g[p.dept] = g[p.dept] || []).push(p); });
+    staff.map(normalizePerson).forEach((p) => { const key = staffGroupLabel(p); (g[key] = g[key] || []).push(p); });
     return g;
   }, [staff]);
 
@@ -774,7 +870,10 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
   const totalShifts = Object.values(pStats).reduce((a, b) => a + b.total, 0);
   const totalPay = staff.reduce((s, p) => s + (pStats[p.id]?.total || 0) * p.rate, 0);
 
-  const accrual = useMemo(() => percentAccrual(staff, shifts, cash, lastPayoutDay), [staff, shifts, cash, lastPayoutDay]);
+  const accrual = useMemo(
+    () => percentAccrual(staff, shifts, cash, lastPayoutDay, settings.percentRules || DEFAULT_PERCENT_RULES),
+    [staff, shifts, cash, lastPayoutDay, settings.percentRules]
+  );
 
   const cycle = (day, id) => {
     const v = shifts[day]?.[id];
@@ -799,7 +898,14 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
 
   const submitForm = () => {
     if (!form.name.trim()) return;
-    const rec = { name: form.name.trim(), dept: form.dept.trim() || "Інше", rate: Number(form.rate) || 0 };
+    const profession = form.profession || PROFESSIONS[form.point || "Полум'я"]?.[0] || "Інше";
+    const rec = {
+      name: form.name.trim(),
+      point: form.point || "Полум'я",
+      profession,
+      dept: profession,
+      rate: Number(form.rate) || 0,
+    };
     if (form.id) saveStaff(staff.map((p) => (p.id === form.id ? { ...p, ...rec } : p)));
     else saveStaff([...staff, { id: uid(), ...rec }]);
     setForm(null);
@@ -812,10 +918,10 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
   };
 
   const exportCSV = () => {
-    const rows = [["Ім'я", "Відділ", "Повних змін", "Половинок", "Разом змін", "Ставка (грн)", "Ставка до виплати (грн)", "Накопичений % (грн)"]];
+    const rows = [["Ім'я", "Точка", "Професія", "Повних змін", "Половинок", "Разом змін", "Ставка (грн)", "Ставка до виплати (грн)", "Накопичений % (грн)"]];
     staff.forEach((p) => {
       const s = pStats[p.id] || { full: 0, half: 0, total: 0 };
-      rows.push([p.name, p.dept, s.full, s.half, String(s.total).replace(".", ","), p.rate,
+      rows.push([p.name, normalizePerson(p).point, normalizePerson(p).profession, s.full, s.half, String(s.total).replace(".", ","), p.rate,
         Math.round(s.total * p.rate), Math.round(accrual.perEmp[p.id] || 0)]);
     });
     rows.push(["РАЗОМ", "", "", "", String(totalShifts).replace(".", ","), "", Math.round(totalPay), Math.round(accrual.total)]);
@@ -984,79 +1090,93 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
       {tab === "cash" && (
         <>
           <div style={{ ...S.card, marginBottom: 12 }}>
-            <h2 style={S.h2}>Денна каса</h2>
+            <h2 style={S.h2}>Каса та %</h2>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 16 }}>
+              {POINTS.map((point) => (
+                <button key={point} style={{ ...S.tab, ...(cashPoint === point ? S.tabActive : {}) }} onClick={() => setCashPoint(point)}>
+                  {point}
+                </button>
+              ))}
+            </div>
+
             <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 12 }}>
-              <button style={S.navBtn} onClick={() => shiftCashDay(-1)} aria-label="Попередній день">‹</button>
+              <button style={S.navBtn} onClick={() => shiftCashDay(-1)}>‹</button>
               <input style={{ ...S.input, colorScheme: "dark" }} type="date" value={cashDay} onChange={(e) => e.target.value && setCashDay(e.target.value)} />
-              <button style={S.navBtn} onClick={() => shiftCashDay(1)} aria-label="Наступний день">›</button>
-              {cashDay === tk && <span style={{ color: "#D5E2CE", fontSize: 12 }}>сьогодні</span>}
+              <button style={S.navBtn} onClick={() => shiftCashDay(1)}>›</button>
             </div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, maxWidth: 460 }}>
-              <label style={{ fontSize: 12, color: "#EDE6D8" }}>Кухонна каса, ₴
-                <input style={{ ...S.input, width: "100%", marginTop: 4 }} type="number" min="0" placeholder="0"
-                  value={cashDraft.kitchen} onChange={(e) => setCashDraft({ ...cashDraft, kitchen: e.target.value })} />
+
+            {cashPoint === "Полум'я" ? (
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 10, maxWidth: 520 }}>
+                <label style={S.fieldLabel}>Кухонна каса, ₴
+                  <input style={{ ...S.input, width: "100%", marginTop: 4 }} type="number" min="0" value={cashDraft.kitchen} onChange={(e) => setCashDraft({ ...cashDraft, kitchen: e.target.value })} />
+                </label>
+                <label style={S.fieldLabel}>Барна каса, ₴
+                  <input style={{ ...S.input, width: "100%", marginTop: 4 }} type="number" min="0" value={cashDraft.bar} onChange={(e) => setCashDraft({ ...cashDraft, bar: e.target.value })} />
+                </label>
+              </div>
+            ) : (
+              <label style={{ ...S.fieldLabel, display: "block", maxWidth: 320 }}>Загальна каса {cashPoint}, ₴
+                <input style={{ ...S.input, width: "100%", marginTop: 4 }} type="number" min="0" value={cashDraft.total} onChange={(e) => setCashDraft({ ...cashDraft, total: e.target.value })} />
               </label>
-              <label style={{ fontSize: 12, color: "#EDE6D8" }}>Барна каса, ₴
-                <input style={{ ...S.input, width: "100%", marginTop: 4 }} type="number" min="0" placeholder="0"
-                  value={cashDraft.bar} onChange={(e) => setCashDraft({ ...cashDraft, bar: e.target.value })} />
-              </label>
-            </div>
-            <button style={{ ...S.primary, marginTop: 12 }} onClick={() => writeCash(cashDay, { kitchen: Number(cashDraft.kitchen) || 0, bar: Number(cashDraft.bar) || 0 })}>
-              Зберегти касу за {dayLabel(cashDay)}
-            </button>
-            {lastPayoutDay && cashDay <= lastPayoutDay && (
-              <div style={{ ...S.hint, color: "#C96A5A" }}>Увага: цей день уже входить у виплачений період ({dayLabel(lastPayoutDay)} і раніше) — зміна каси не вплине на нові нарахування.</div>
             )}
 
-            {recentCashDays.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div style={S.deptLabel}>Останні внесені дні</div>
-                {recentCashDays.map((d) => (
-                  <button key={d} onClick={() => setCashDay(d)} style={{ ...S.ghost, marginRight: 6, marginBottom: 6 }}>
-                    {dayLabel(d)} · 🍳 {money(cash[d].kitchen || 0)} · 🍺 {money(cash[d].bar || 0)}
-                  </button>
-                ))}
+            <button style={{ ...S.primary, marginTop: 12 }} onClick={() => writeCash(
+              cashDay,
+              cashPoint === "Полум'я"
+                ? { kitchen: Number(cashDraft.kitchen) || 0, bar: Number(cashDraft.bar) || 0 }
+                : { total: Number(cashDraft.total) || 0 },
+              cashPoint
+            )}>
+              Зберегти касу · {cashPoint}
+            </button>
+          </div>
+
+          <div style={{ ...S.card, marginBottom: 12 }}>
+            <h2 style={S.h2}>Правила % · {cashPoint}</h2>
+            <p style={{ ...S.hint, marginTop: 0 }}>Вкажи відсоток для кожної професії. Значення 0 означає, що відсоток не нараховується.</p>
+            {Object.entries(percentRulesDraft[cashPoint]?.rules || {}).map(([profession, rates]) => (
+              <div key={profession} style={{ ...S.personRow, marginBottom: 8 }}>
+                <span style={{ fontWeight: 600 }}>{profession}</span>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                  {(percentRulesDraft[cashPoint]?.sources || []).map((source) => (
+                    <label key={source} style={S.fieldLabel}>
+                      {percentRulesDraft[cashPoint]?.labels?.[source]} %
+                      <input
+                        style={{ ...S.input, width: 90, marginLeft: 6 }}
+                        type="number" min="0" step="0.1"
+                        value={rates[source] ?? 0}
+                        onChange={(e) => setPercentRulesDraft((prev) => ({
+                          ...prev,
+                          [cashPoint]: {
+                            ...prev[cashPoint],
+                            rules: {
+                              ...prev[cashPoint].rules,
+                              [profession]: { ...prev[cashPoint].rules[profession], [source]: Number(e.target.value) || 0 },
+                            },
+                          },
+                        }))}
+                      />
+                    </label>
+                  ))}
+                </div>
               </div>
-            )}
+            ))}
+            <button style={S.primary} onClick={() => saveSettings({ ...settings, percentRules: percentRulesDraft })}>Зберегти правила %</button>
           </div>
 
           <div style={S.card}>
-            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 4 }}>
-              <h2 style={{ ...S.h2, margin: 0 }}>Накопичені %</h2>
-              <button style={{ ...S.primary, background: "#6B7F5E", color: "#EDE6D8" }} onClick={doPayout}>💸 Виплатити всі % · {money(accrual.total)}</button>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+              <h2 style={{ ...S.h2, margin: 0 }}>Накопичені % · {cashPoint}</h2>
+              <button style={{ ...S.primary, background: "#6B7F5E", color: "#FFFFFF" }} onClick={doPayout}>
+                💸 Виплатити всі % · {money(accrual.total)}
+              </button>
             </div>
-            <div style={{ ...S.hint, marginTop: 0, marginBottom: 12 }}>
-              Рахується щодня від внесених кас, мінус 5% ПДВ, {lastPayoutDay ? `з дня після останньої виплати (${dayLabel(lastPayoutDay)})` : "з першого внесеного дня"}. Ставки: бар 3% барної + 0,5% кухонної · офіціанти 3,5% кухонної · кухня 1,5% · прибирання 0,5%.
-            </div>
-
-            {accrual.undistributed > 0 && (
-              <div style={{ ...S.hint, color: "#C96A5A", marginBottom: 12 }}>
-                ⚠ {money(accrual.undistributed)} не розподілено: у дні {accrual.undistributedDays.map(dayLabel).join(", ")} каса внесена, але у відповідному відділі ніхто не відмічений на зміні. Відміть людей у табелі заднім числом — і сума розподілиться.
-              </div>
-            )}
-
-            {Object.entries(byDept).map(([dept, people]) => PCT[dept] && (
-              <div key={dept} style={{ marginBottom: 12 }}>
-                <div style={S.deptLabel}>{dept}</div>
-                {people.map((p) => (
-                  <div key={p.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 4px", borderBottom: "1px solid #2E2B25", fontSize: 14 }}>
-                    <span>{p.name}</span>
-                    <span style={{ color: "#E8763A", fontWeight: 600 }}>{money(accrual.perEmp[p.id] || 0)}</span>
-                  </div>
-                ))}
+            {staff.map(normalizePerson).filter((person) => person.point === cashPoint).map((person) => (
+              <div key={person.id} style={S.lineRow}>
+                <span>{person.name}<small style={{ display: "block", color: "#EDE6D8" }}>{person.profession}</small></span>
+                <strong style={{ color: "#E8763A" }}>{money(accrual.perEmp[person.id] || 0)}</strong>
               </div>
             ))}
-
-            {payouts.length > 0 && (
-              <div style={{ marginTop: 16 }}>
-                <div style={S.deptLabel}>Історія виплат %</div>
-                {[...payouts].reverse().slice(0, 8).map((p) => (
-                  <div key={p.id} style={{ fontSize: 13, color: "#EDE6D8", padding: "4px 0" }}>
-                    {new Date(p.ts).toLocaleDateString("uk-UA")} · виплачено {money(p.total)} (нарахування по {dayLabel(p.upTo)})
-                  </div>
-                ))}
-              </div>
-            )}
           </div>
         </>
       )}
@@ -1162,7 +1282,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                       <td style={{ ...S.tdPay, textAlign: "center", fontWeight: 600 }}>{fmt(s.total)}</td>
                       <td style={S.tdPay}>{p.rate ? money(p.rate) : "—"}</td>
                       <td style={{ ...S.tdPay, color: "#E8763A", fontWeight: 700 }}>{money(s.total * p.rate)}</td>
-                      <td style={{ ...S.tdPay, color: "#D5E2CE", fontWeight: 600 }}>{PCT[p.dept] ? money(accrual.perEmp[p.id] || 0) : "—"}</td>
+                      <td style={{ ...S.tdPay, color: "#D5E2CE", fontWeight: 600 }}>{money(accrual.perEmp[p.id] || 0)}</td>
                     </tr>
                   );
                 }),
@@ -1185,14 +1305,21 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
         <div style={S.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
             <h2 style={{ ...S.h2, margin: 0 }}>Персонал</h2>
-            <button style={S.primary} onClick={() => setForm({ name: "", dept: "Бар", rate: "" })}>+ Додати</button>
+            <button style={S.primary} onClick={() => setForm({ name: "", point: "Полум'я", profession: "Бармен", rate: "" })}>+ Додати</button>
           </div>
 
           {form && (
             <div style={S.formBox}>
               <input style={S.input} placeholder="Ім'я" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-              <input style={S.input} list="depts" placeholder="Відділ" value={form.dept} onChange={(e) => setForm({ ...form, dept: e.target.value })} />
-              <datalist id="depts">{[...new Set([...DEPTS, ...staff.map((p) => p.dept)])].map((d) => <option key={d} value={d} />)}</datalist>
+              <select style={S.input} value={form.point || "Полум'я"} onChange={(e) => {
+                const point = e.target.value;
+                setForm({ ...form, point, profession: PROFESSIONS[point][0] });
+              }}>
+                {POINTS.map((point) => <option key={point} value={point}>{point}</option>)}
+              </select>
+              <select style={S.input} value={form.profession || PROFESSIONS[form.point || "Полум'я"][0]} onChange={(e) => setForm({ ...form, profession: e.target.value })}>
+                {(PROFESSIONS[form.point || "Полум'я"] || []).map((profession) => <option key={profession} value={profession}>{profession}</option>)}
+              </select>
               <input style={S.input} type="number" min="0" placeholder="Ставка за зміну, ₴" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} />
               <div style={{ display: "flex", gap: 8 }}>
                 <button style={S.primary} onClick={submitForm}>{form.id ? "Зберегти" : "Додати"}</button>
@@ -1203,16 +1330,16 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
 
           {Object.entries(byDept).map(([dept, people]) => (
             <div key={dept} style={{ marginBottom: 14 }}>
-              <div style={S.deptLabel}>{dept}{PCT[dept] && <span style={{ textTransform: "none", letterSpacing: 0 }}> · {PCT[dept].kitchen ? `${PCT[dept].kitchen}% кухні` : ""}{PCT[dept].kitchen && PCT[dept].bar ? " + " : ""}{PCT[dept].bar ? `${PCT[dept].bar}% бару` : ""} (−5% ПДВ)</span>}</div>
+              <div style={S.deptLabel}>{dept}</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
                 {people.map((p) => (
                   <div key={p.id} style={{ ...S.personRow, cursor: "default" }}>
                     <span>
                       <span style={{ fontWeight: 600 }}>{p.name}</span>
-                      <span style={{ color: "#EDE6D8", fontSize: 13 }}> · {p.rate ? `${p.rate.toLocaleString("uk-UA")} ₴/зміна` : "ставку не задано"}</span>
+                      <span style={{ color: "#EDE6D8", fontSize: 13 }}> · {normalizePerson(p).point} · {normalizePerson(p).profession} · {p.rate ? `${p.rate.toLocaleString("uk-UA")} ₴/зміна` : "ставку не задано"}</span>
                     </span>
                     <span style={{ display: "flex", gap: 6 }}>
-                      <button style={S.ghost} onClick={() => setForm({ id: p.id, name: p.name, dept: p.dept, rate: String(p.rate || "") })}>Змінити</button>
+                      <button style={S.ghost} onClick={() => setForm({ id: p.id, name: p.name, point: normalizePerson(p).point, profession: normalizePerson(p).profession, rate: String(p.rate || "") })}>Змінити</button>
                       <button style={{ ...S.ghost, color: "#C96A5A" }} onClick={() => {
                         if (confirm(`Видалити ${p.name}? Відмітки залишаться в архіві.`)) saveStaff(staff.filter((x) => x.id !== p.id));
                       }}>Видалити</button>
@@ -1356,4 +1483,6 @@ const S = {
   textarea: { width: "100%", background: "#1C1A17", border: "1px solid #3A362F", color: "#EDE6D8", borderRadius: 8, padding: "12px", fontSize: 13.5, lineHeight: 1.6, resize: "vertical" },
   rulesText: { whiteSpace: "pre-wrap", fontFamily: "'Inter', sans-serif", fontSize: 13.5, lineHeight: 1.7, color: "#D8D0C2", margin: 0 },
   footer: { textAlign: "center", color: "#CFC7B9", fontSize: 12, marginTop: 24 },
+  fieldLabel: { color: "#EDE6D8", fontSize: 12.5, fontWeight: 500 },
+  lineRow: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "9px 4px", borderBottom: "1px solid #3A362F", color: "#EDE6D8", fontSize: 14 },
 };
