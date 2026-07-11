@@ -14,6 +14,11 @@ const K_CASH = "flame:cash";
 const K_PAYOUTS = "flame:payouts";
 const K_RULES = "flame:rules";
 const K_ME = "flame:me";
+const K_ANNOUNCEMENTS = "flame:announcements";
+const K_REQUESTS = "flame:requests";
+const K_PLANS = "flame:plans";
+const K_CLOSED_MONTHS = "flame:closedMonths";
+const K_AUDIT = "flame:audit";
 
 const POINTS = ["Полум'я", "Підгір'я", "SPA"];
 const PROFESSIONS = {
@@ -34,25 +39,25 @@ const DEFAULT_ADMINS = [
 
 const DEFAULT_PERCENT_RULES = {
   "Полум'я": {
-    waiterRate: 4.5,
-    waiterBarShare: 10,
-    waiterCleaningShare: 10,
+    waiterRate: 3.5,
+    waiterBarRate: 0.5,
+    waiterCleaningRate: 0.5,
     kitchenRate: 1.5,
     barRate: 3,
     cleaningRate: 0.5,
   },
   "Підгір'я": {
     waiterRate: 0,
-    waiterBarShare: 0,
-    waiterCleaningShare: 0,
+    waiterBarRate: 0,
+    waiterCleaningRate: 0,
     kitchenRate: 0,
     barRate: 3,
     cleaningRate: 0,
   },
   SPA: {
     waiterRate: 0,
-    waiterBarShare: 0,
-    waiterCleaningShare: 0,
+    waiterBarRate: 0,
+    waiterCleaningRate: 0,
     kitchenRate: 0,
     barRate: 3,
     cleaningRate: 0,
@@ -61,7 +66,20 @@ const DEFAULT_PERCENT_RULES = {
 
 
 const normalizePercentRules = (input = {}) => Object.fromEntries(
-  POINTS.map((point) => [point, { ...DEFAULT_PERCENT_RULES[point], ...(input[point] || {}) }])
+  POINTS.map((point) => {
+    const saved = input[point] || {};
+    const isLegacyWaiterModel =
+      point === "Полум'я" &&
+      (saved.waiterBarShare !== undefined || saved.waiterCleaningShare !== undefined);
+
+    return [point, {
+      ...DEFAULT_PERCENT_RULES[point],
+      ...saved,
+      ...(isLegacyWaiterModel
+        ? { waiterRate: 3.5, waiterBarRate: 0.5, waiterCleaningRate: 0.5 }
+        : {}),
+    }];
+  })
 );
 
 const SEED = [
@@ -219,10 +237,10 @@ function calculateAccrual(staffInput, shifts, cash, afterDay, rulesInput) {
           if (personalCash <= 0) return;
           const person = staff.find((p) => p.id === employeeId && p.point === point && p.profession === "Офіціант");
           if (!person) return;
-          const cleanFund = personalCash * (Number(r.waiterRate) || 0) / 100 * netFactor;
-          const barPart = cleanFund * (Number(r.waiterBarShare) || 0) / 100;
-          const cleaningPart = cleanFund * (Number(r.waiterCleaningShare) || 0) / 100;
-          const waiterPart = Math.max(0, cleanFund - barPart - cleaningPart);
+          const waiterPart = personalCash * (Number(r.waiterRate) || 0) / 100 * netFactor;
+          const barPart = personalCash * (Number(r.waiterBarRate) || 0) / 100 * netFactor;
+          const cleaningPart = personalCash * (Number(r.waiterCleaningRate) || 0) / 100 * netFactor;
+          const cleanFund = waiterPart + barPart + cleaningPart;
           perEmp[employeeId] = (perEmp[employeeId] || 0) + waiterPart;
           byPoint[point].perEmp[employeeId] = (byPoint[point].perEmp[employeeId] || 0) + waiterPart;
           byPoint[point].total += waiterPart;
@@ -294,6 +312,11 @@ export default function App() {
   const [payouts, setPayouts] = useState([]);
   const [rules, setRules] = useState(DEFAULT_RULES);
   const [settings, setSettings] = useState({ admins: [], percentRules: DEFAULT_PERCENT_RULES });
+  const [announcements, setAnnouncements] = useState([]);
+  const [requests, setRequests] = useState([]);
+  const [plans, setPlans] = useState({});
+  const [closedMonths, setClosedMonths] = useState([]);
+  const [audit, setAudit] = useState([]);
   const [me, setMe] = useState(null);
   const [loading, setLoading] = useState(true);
   const [saveStatus, setSaveStatus] = useState(null);
@@ -318,6 +341,11 @@ export default function App() {
       setCash((await sGet(K_CASH, true)) || {});
       setPayouts((await sGet(K_PAYOUTS, true)) || []);
       setRules((await sGet(K_RULES, true)) || DEFAULT_RULES);
+      setAnnouncements((await sGet(K_ANNOUNCEMENTS, true)) || []);
+      setRequests((await sGet(K_REQUESTS, true)) || []);
+      setPlans((await sGet(K_PLANS, true)) || {});
+      setClosedMonths((await sGet(K_CLOSED_MONTHS, true)) || []);
+      setAudit((await sGet(K_AUDIT, true)) || []);
       setSettings(loadedSettings);
       const savedMe = await sGet(K_ME, false);
       if (savedMe) setMe(savedMe);
@@ -329,8 +357,9 @@ export default function App() {
 
   const refresh = async () => {
     if (pending.current > 0) return;
-    const [st, sh, ca, po, ru, se] = await Promise.all([
+    const [st, sh, ca, po, ru, se, an, rq, pl, cl, au] = await Promise.all([
       sGet(K_STAFF, true), sGet(K_SHIFTS, true), sGet(K_CASH, true), sGet(K_PAYOUTS, true), sGet(K_RULES, true), sGet(K_SETTINGS, true),
+      sGet(K_ANNOUNCEMENTS, true), sGet(K_REQUESTS, true), sGet(K_PLANS, true), sGet(K_CLOSED_MONTHS, true), sGet(K_AUDIT, true),
     ]);
     if (st) setStaff(st.map(normalizePerson));
     if (sh) setShifts(sh);
@@ -338,6 +367,11 @@ export default function App() {
     if (po) setPayouts(po);
     if (ru) setRules(ru);
     if (se) setSettings({ ...se, percentRules: normalizePercentRules(se.percentRules) });
+    if (an) setAnnouncements(an);
+    if (rq) setRequests(rq);
+    if (pl) setPlans(pl);
+    if (cl) setClosedMonths(cl);
+    if (au) setAudit(au);
     setLastSync(new Date());
   };
 
@@ -394,6 +428,16 @@ export default function App() {
   const saveStaff = (next) => saveShared(K_STAFF, next.map(normalizePerson), setStaff);
   const saveSettings = (next) => saveShared(K_SETTINGS, next, setSettings);
   const saveRules = (next) => saveShared(K_RULES, next, setRules);
+  const saveAnnouncements = (next) => saveShared(K_ANNOUNCEMENTS, next, setAnnouncements);
+  const saveRequests = (next) => saveShared(K_REQUESTS, next, setRequests);
+  const savePlans = (next) => saveShared(K_PLANS, next, setPlans);
+  const saveClosedMonths = (next) => saveShared(K_CLOSED_MONTHS, next, setClosedMonths);
+  const addAudit = async (action, details = "") => {
+    const record = { id: uid(), ts: new Date().toISOString(), admin: me?.name || "Система", action, details };
+    const latest = (await sGet(K_AUDIT, true)) || audit;
+    const next = [...latest, record].slice(-300);
+    return saveShared(K_AUDIT, next, setAudit);
+  };
   const addPayout = async (record) => {
     const latest = (await sGet(K_PAYOUTS, true)) || payouts;
     return saveShared(K_PAYOUTS, [...latest, record], setPayouts);
@@ -414,9 +458,9 @@ export default function App() {
   if (me.type === "emp") {
     const person = staff.find((p) => p.id === me.id);
     if (!person) return <Shell><Centered>Працівника не знайдено. Вийди та зайди знову.</Centered></Shell>;
-    return <Shell><EmployeeView person={person} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} writeShift={writeShift} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
+    return <Shell><EmployeeView person={person} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} announcements={announcements} requests={requests} saveRequests={saveRequests} writeShift={writeShift} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
   }
-  return <Shell><AdminView me={me} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} writeShift={writeShift} writeCash={writeCash} saveStaff={saveStaff} saveSettings={saveSettings} saveRules={saveRules} addPayout={addPayout} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
+  return <Shell><AdminView me={me} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} announcements={announcements} requests={requests} plans={plans} closedMonths={closedMonths} audit={audit} writeShift={writeShift} writeCash={writeCash} saveStaff={saveStaff} saveSettings={saveSettings} saveRules={saveRules} saveAnnouncements={saveAnnouncements} saveRequests={saveRequests} savePlans={savePlans} saveClosedMonths={saveClosedMonths} addAudit={addAudit} addPayout={addPayout} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
 }
 
 function Shell({ children }) {
@@ -426,6 +470,33 @@ function Shell({ children }) {
       *{box-sizing:border-box} body{margin:0;background:#171512} button,input,textarea,select{font-family:inherit}
       button{cursor:pointer} button:disabled{cursor:not-allowed} input::placeholder,textarea::placeholder{color:#d8d0c4;opacity:.85}
       select option{background:#1c1a17;color:#fff} ::-webkit-scrollbar{height:8px;width:8px} ::-webkit-scrollbar-thumb{background:#49443c;border-radius:5px}
+      .finance-report,.waiter-report{border:1px solid #3b3730;border-radius:12px;overflow:hidden;background:#1d1b18}
+      .finance-report-head,.finance-report-row{display:grid;grid-template-columns:1.05fr repeat(5,minmax(110px,1fr));align-items:center}
+      .finance-report-head{background:#2a2722;color:#eee7dc;font-size:12px;font-weight:700}
+      .finance-report-head span,.finance-report-row>div{padding:12px;border-right:1px solid #3b3730}
+      .finance-report-row{border-top:1px solid #3b3730}
+      .finance-report-row small{display:none;color:#cfc7bb;font-size:11px;margin-bottom:4px}
+      .finance-report-row b{display:block;color:#fff}
+      .finance-title{font-family:Alegreya,serif;font-size:18px;font-weight:700}
+      .waiter-report-head,.waiter-report-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;padding:12px 14px}
+      .waiter-report-head{background:#2a2722;color:#eee7dc;font-size:12px;font-weight:700}
+      .waiter-report-row{border-top:1px solid #3b3730}
+      .waiter-report-row b{text-align:right}
+      @media(max-width:720px){
+        .finance-report-head{display:none}
+        .finance-report{border:0;background:transparent;display:grid;gap:10px}
+        .finance-report-row{grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #3b3730;border-radius:12px;background:#1d1b18;overflow:hidden}
+        .finance-report-row>div{border-right:0;border-bottom:1px solid #3b3730;padding:11px}
+        .finance-report-row>div:nth-last-child(-n+2){border-bottom:0}
+        .finance-title{grid-column:1/-1;background:#2a2722;border-bottom:1px solid #3b3730!important}
+        .finance-report-row small{display:block}
+        .waiter-report-head{display:none}
+        .waiter-report-row{grid-template-columns:1fr auto;gap:6px 12px}
+        .waiter-report-row span{font-weight:700}
+        .waiter-report-row b:nth-child(2)::before{content:'Каса: ';color:#cfc7bb;font-weight:400}
+        .waiter-report-row b:nth-child(3){grid-column:1/-1;text-align:left}
+        .waiter-report-row b:nth-child(3)::before{content:'Нараховано: ';color:#cfc7bb;font-weight:400}
+      }
     `}</style>
     {children}
   </div>;
@@ -505,7 +576,7 @@ function ShiftReminderControl({ person }) {
   </div>;
 }
 
-function EmployeeView({ person, staff, shifts, cash, settings, rules, writeShift, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
+function EmployeeView({ person, staff, shifts, cash, settings, rules, announcements, requests, saveRequests, writeShift, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
   const today = new Date();
   const todayKey = dk(today);
   const selected = shifts[todayKey]?.[person.id];
@@ -520,6 +591,27 @@ function EmployeeView({ person, staff, shifts, cash, settings, rules, writeShift
     ["training", "🎓 Стажування"],
     ["off", "💤 Вихідний"],
   ];
+  const monthPrefix = `${today.getFullYear()}-${pad(today.getMonth() + 1)}`;
+  const monthDays = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+  const monthValues = Array.from({ length: monthDays }, (_, i) => shifts[`${monthPrefix}-${pad(i + 1)}`]?.[person.id]);
+  const monthPaid = monthValues.reduce((sum, v) => sum + (isPaidShift(v) ? Number(v) : 0), 0);
+  const monthTraining = monthValues.filter((v) => v === "training").length;
+  const monthCash = Object.keys(cash).filter((d) => d.startsWith(monthPrefix)).reduce((sum, day) => sum + (Number(getPointCash(cash, day, person.point).waiterCash?.[person.id]) || 0), 0);
+  const activeAnnouncements = (announcements || []).filter((a) => !a.expiresAt || a.expiresAt >= todayKey);
+  const myRequests = (requests || []).filter((r) => r.employeeId === person.id).sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+  const [requestType, setRequestType] = useState("Виправлення табеля");
+  const [requestText, setRequestText] = useState("");
+  const sendRequest = async () => {
+    if (!requestText.trim()) return;
+    await saveRequests([...(requests || []), { id: uid(), employeeId: person.id, employeeName: person.name, point: person.point, type: requestType, text: requestText.trim(), status: "new", createdAt: new Date().toISOString() }]);
+    setRequestText("");
+  };
+  const achievements = [
+    monthPaid >= 10 && "🔥 10+ змін за місяць",
+    monthCash >= 50000 && "🏆 Особиста каса 50 000+ ₴",
+    monthTraining >= 3 && "🎓 Активне стажування",
+    myPercent >= 1000 && "💰 Накопичено 1 000+ ₴",
+  ].filter(Boolean);
   return <main style={{ maxWidth: 620, margin: "0 auto" }}>
     <Header onLogout={onLogout} />
     <div style={S.card}>
@@ -547,16 +639,28 @@ function EmployeeView({ person, staff, shifts, cash, settings, rules, writeShift
         <Mini title="За зміни" value={person.rate ? money(stats.total * person.rate) : "—"} />
       </div>
     </div>
+    <div style={{ ...S.card, marginTop: 12 }}>
+      <h3 style={S.h3}>📊 Мої результати цього місяця</h3>
+      <div style={S.grid3}><Mini title="Змін" value={fmt(monthPaid)} /><Mini title="Особиста каса" value={person.profession === "Офіціант" ? money(monthCash) : "—"} /><Mini title="Прогноз виплати" value={money(monthPaid * person.rate + myPercent)} /></div>
+    </div>
+    <div style={{ ...S.card, marginTop: 12 }}>
+      <h3 style={S.h3}>🗓 Календар місяця</h3>
+      <div style={S.calendarGrid}>{Array.from({ length: monthDays }, (_, i) => { const v = monthValues[i]; return <div key={i} title={String(v || "")} style={{ ...S.calendarDay, ...(v===1?S.calendarFull:v===0.5?S.calendarHalf:v==="training"?S.calendarTraining:v==="off"?S.calendarOff:{}) }}>{i+1}</div>; })}</div>
+      <p style={S.hint}>Помаранчевий — повна, половина — ½, золотий — стажування, сірий — вихідний.</p>
+    </div>
+    {activeAnnouncements.length > 0 && <div style={{ ...S.card, marginTop: 12 }}><h3 style={S.h3}>📣 Оголошення</h3>{activeAnnouncements.map((a) => <div key={a.id} style={S.notice}><b>{a.title}</b><p style={{margin:"6px 0 0"}}>{a.text}</p></div>)}</div>}
+    <div style={{ ...S.card, marginTop: 12 }}><h3 style={S.h3}>🏅 Досягнення</h3>{achievements.length ? achievements.map((x) => <div key={x} style={S.badge}>{x}</div>) : <p style={S.hint}>Перші досягнення з’являться після кількох змін.</p>}</div>
+    <div style={{ ...S.card, marginTop: 12 }}><h3 style={S.h3}>✉️ Запит адміністратору</h3><select style={S.inputFull} value={requestType} onChange={(e)=>setRequestType(e.target.value)}>{["Виправлення табеля","Заміна зміни","Вихідний","Помилка в касі","Інше"].map(x=><option key={x}>{x}</option>)}</select><textarea style={{...S.textarea,marginTop:8}} rows={3} placeholder="Опиши запит" value={requestText} onChange={(e)=>setRequestText(e.target.value)} /><button style={{...S.primary,marginTop:8}} onClick={sendRequest}>Надіслати</button>{myRequests.slice(0,5).map(r=><div key={r.id} style={S.requestRow}><span>{r.type}: {r.text}</span><b>{r.status==="approved"?"Схвалено":r.status==="rejected"?"Відхилено":"На розгляді"}</b></div>)}</div>
     {person.profession === "Офіціант" && <div style={{ ...S.card, marginTop: 12 }}><h3 style={S.h3}>Правила</h3><pre style={S.pre}>{rules}</pre></div>}
     <ShiftReminderControl person={person} />
     <footer style={S.footer}>Синхронізовано: {lastSync ? lastSync.toLocaleTimeString("uk-UA") : "—"} · <button style={S.linkBtn} onClick={onRefresh}>Оновити</button></footer>
   </main>;
 }
 
-function AdminView({ me, staff, shifts, cash, payouts, settings, rules, writeShift, writeCash, saveStaff, saveSettings, saveRules, addPayout, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
+function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announcements, requests, plans, closedMonths, audit, writeShift, writeCash, saveStaff, saveSettings, saveRules, saveAnnouncements, saveRequests, savePlans, saveClosedMonths, addAudit, addPayout, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
   const today = new Date();
   const todayKey = dk(today);
-  const [tab, setTab] = useState("day");
+  const [tab, setTab] = useState("control");
   const [selectedDay, setSelectedDay] = useState(todayKey);
   const [cashPoint, setCashPoint] = useState("Полум'я");
   const [cashDraft, setCashDraft] = useState({ kitchen: "", bar: "", total: "", waiterCash: {} });
@@ -566,6 +670,10 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, writeShi
   const [rulesDraft, setRulesDraft] = useState(rules);
   const [percentDraft, setPercentDraft] = useState(normalizePercentRules(settings.percentRules));
   const [cashMessage, setCashMessage] = useState("");
+  const [announcementForm, setAnnouncementForm] = useState({ title: "", text: "", expiresAt: "" });
+  const [planDraft, setPlanDraft] = useState("");
+  const [massPoint, setMassPoint] = useState("Полум'я");
+  const [massStatus, setMassStatus] = useState("off");
 
   useEffect(() => setPercentDraft(normalizePercentRules(settings.percentRules)), [settings.percentRules]);
   useEffect(() => {
@@ -614,6 +722,38 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, writeShi
     return out;
   }, [cash, monthPrefix]);
   const bestWaiter = [...waiters].sort((a, b) => (waiterMonthCash[b.id] || 0) - (waiterMonthCash[a.id] || 0))[0];
+  const missingToday = normalizedStaff.filter((p) => shifts[todayKey]?.[p.id] === undefined);
+  const anomalies = useMemo(() => {
+    const out = [];
+    Object.keys(cash).filter((d) => d.startsWith(monthPrefix)).forEach((day) => {
+      POINTS.forEach((point) => {
+        const rec = getPointCash(cash, day, point);
+        const hasCash = rec.total > 0 || rec.kitchen > 0 || rec.bar > 0;
+        const workers = normalizedStaff.filter((p) => p.point === point && isPaidShift(shifts[day]?.[p.id]));
+        if (hasCash && !workers.length) out.push(`${dayLabel(day)} · ${point}: є каса, але немає змін`);
+        if (!hasCash && workers.length) out.push(`${dayLabel(day)} · ${point}: є працівники, але немає каси`);
+        if (point === "Полум'я") {
+          const personal = Object.values(rec.waiterCash || {}).reduce((s,v)=>s+Number(v||0),0);
+          if (personal > rec.total && rec.total > 0) out.push(`${dayLabel(day)} · особисті каси офіціантів більші за загальну`);
+        }
+      });
+    });
+    return out;
+  }, [cash, shifts, normalizedStaff, monthPrefix]);
+  const planKey = monthPrefix;
+  const monthPlan = Number(plans?.[planKey]) || 0;
+  const monthTotalCash = POINTS.reduce((s,p)=>s+monthCashSummary[p].total,0);
+  const planProgress = monthPlan > 0 ? Math.min(100, monthTotalCash / monthPlan * 100) : 0;
+  const estimatedPayroll = normalizedStaff.reduce((sum,p)=>sum+(stats[p.id]?.total||0)*p.rate,0)+accrual.total;
+  const forecastPayroll = today.getDate() > 0 ? estimatedPayroll / Math.max(1,today.getDate()) * monthDays : estimatedPayroll;
+  const pointComparison = POINTS.map((point)=>({ point, cash: monthCashSummary[point].total, percent: accrual.byPoint[point]?.total||0, workers: normalizedStaff.filter(p=>p.point===point).length }));
+  const monthClosed = (closedMonths || []).includes(monthPrefix);
+  const createAnnouncement = async () => { if(!announcementForm.title.trim() || !announcementForm.text.trim()) return; const next=[...(announcements||[]),{id:uid(),...announcementForm,createdAt:new Date().toISOString(),author:me.name}]; await saveAnnouncements(next); await addAudit("Створено оголошення", announcementForm.title); setAnnouncementForm({title:"",text:"",expiresAt:""}); };
+  const decideRequest = async (id,status) => { const next=(requests||[]).map(r=>r.id===id?{...r,status,decidedAt:new Date().toISOString(),decidedBy:me.name}:r); await saveRequests(next); await addAudit(status==="approved"?"Схвалено запит":"Відхилено запит", id); };
+  const saveMonthPlan = async () => { const next={...(plans||{}),[planKey]:Number(planDraft)||0}; await savePlans(next); await addAudit("Оновлено місячний план", `${planKey}: ${money(next[planKey])}`); };
+  const toggleMonthClose = async () => { const next=monthClosed?(closedMonths||[]).filter(x=>x!==monthPrefix):[...(closedMonths||[]),monthPrefix]; await saveClosedMonths(next); await addAudit(monthClosed?"Відкрито місяць":"Закрито місяць",monthPrefix); };
+  const applyMassStatus = async () => { if(!confirm(`Встановити статус усім працівникам ${massPoint} за ${dayLabel(selectedDay)}?`)) return; let next={...(shifts||{}),[selectedDay]:{...(shifts[selectedDay]||{})}}; normalizedStaff.filter(p=>p.point===massPoint).forEach(p=>{next[selectedDay][p.id]=massStatus}); await sSet(K_SHIFTS,next,true); window.location.reload(); };
+  const exportCsv = () => { const rows=[["Об’єкт","Кухня","Бар","Загальна каса","Особисті каси","Нараховано %"],...POINTS.map(p=>[p,monthCashSummary[p].kitchen,monthCashSummary[p].bar,monthCashSummary[p].total,monthCashSummary[p].waiter,accrual.byPoint[p]?.total||0])]; const csv=rows.map(r=>r.join(";")).join("\n"); const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`fin-report-${monthPrefix}.csv`; a.click(); URL.revokeObjectURL(a.href); };
 
   const submitStaff = async () => {
     if (!staffForm?.name?.trim()) return;
@@ -656,8 +796,18 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, writeShi
       <Stat title="Нерозподілено" value={money(accrual.undistributed)} />
     </div>
     <nav style={S.tabs}>{[
-      ["day", "День"], ["cash", "Каса та %"], ["grid", "Табель"], ["pay", "Зарплата"], ["finance", "Фінзвіт"], ["staff", "Персонал"], ["rules", "Правила"],
+      ["control", "Центр керування"], ["day", "День"], ["cash", "Каса та %"], ["grid", "Табель"], ["pay", "Зарплата"], ["finance", "Фінзвіт"], ["requests", "Запити"], ["announcements", "Оголошення"], ["staff", "Персонал"], ["rules", "Правила"],
     ].map(([key, label]) => <button key={key} style={{ ...S.tab, ...(tab === key ? S.tabOn : {}) }} onClick={() => setTab(key)}>{label}</button>)}</nav>
+
+    {tab === "control" && <>
+      <div style={S.stats}><Stat title="Не відмітилися сьогодні" value={missingToday.length} ember={missingToday.length>0}/><Stat title="Проблеми в даних" value={anomalies.length}/><Stat title="Прогноз виплат" value={money(forecastPayroll)}/></div>
+      <div style={{...S.card,marginBottom:12}}><div style={S.sectionHead}><h2 style={S.h2}>План / факт · {MONTHS[month.getMonth()]}</h2><MonthNav month={month} setMonth={setMonth}/></div><div style={S.progress}><div style={{...S.progressBar,width:`${planProgress}%`}}/></div><p style={S.hint}>{money(monthTotalCash)} із {monthPlan?money(monthPlan):"план не задано"} · {fmt(planProgress)}%</p><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input style={S.input} type="number" placeholder="Місячний план" value={planDraft} onChange={e=>setPlanDraft(e.target.value)}/><button style={S.primary} onClick={saveMonthPlan}>Зберегти план</button><button style={S.ghost} onClick={toggleMonthClose}>{monthClosed?"Відкрити місяць":"Закрити місяць"}</button></div></div>
+      <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Порівняння об’єктів</h2>{pointComparison.map(x=><div key={x.point} style={S.metricRow}><b>{x.point}</b><span>Каса {money(x.cash)}</span><span>% {money(x.percent)}</span><span>Працівників {x.workers}</span></div>)}</div>
+      <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Хто не відмітився сьогодні</h2>{missingToday.length?missingToday.map(p=><div style={S.lineRow} key={p.id}><span>{p.name}<small style={S.smallText}>{p.point} · {p.profession}</small></span><button style={S.ghost} onClick={()=>writeShift(todayKey,p.id,"off")}>Поставити вихідний</button></div>):<p style={S.success}>✓ Усі відмітилися</p>}</div>
+      <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Перевірка даних</h2>{anomalies.length?anomalies.slice(0,20).map(x=><div key={x} style={S.alertRow}>⚠ {x}</div>):<p style={S.success}>✓ Критичних помилок не знайдено</p>}</div>
+      <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Масова дія</h2><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input style={S.input} type="date" value={selectedDay} onChange={e=>setSelectedDay(e.target.value)}/><select style={S.input} value={massPoint} onChange={e=>setMassPoint(e.target.value)}>{POINTS.map(p=><option key={p}>{p}</option>)}</select><select style={S.input} value={massStatus} onChange={e=>setMassStatus(e.target.value)}><option value="off">Вихідний</option><option value="training">Стажування</option><option value="1">Повна</option><option value="0.5">Пів зміни</option></select><button style={S.primary} onClick={applyMassStatus}>Застосувати всім</button></div></div>
+      <div style={S.card}><h2 style={S.h2}>Журнал адміністратора</h2>{(audit||[]).slice().reverse().slice(0,30).map(a=><div key={a.id} style={S.auditRow}><span><b>{a.action}</b><small style={S.smallText}>{a.details}</small></span><small>{new Date(a.ts).toLocaleString("uk-UA")} · {a.admin}</small></div>)}</div>
+    </>}
 
     {tab === "day" && <div style={S.card}>
       <div style={S.sectionHead}><h2 style={S.h2}>Графік на день</h2><input style={S.input} type="date" value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)} /></div>
@@ -734,12 +884,56 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, writeShi
     </div>}
 
     {tab === "finance" && <div style={S.card}>
-      <div style={S.sectionHead}><h2 style={S.h2}>Місячний фінансовий звіт</h2><MonthNav month={month} setMonth={setMonth} /></div>
-      <div style={S.stats}>{POINTS.map((point) => <Stat key={point} title={`${point} · каса`} value={money(monthCashSummary[point].total)} />)}</div>
-      <div style={{ overflowX: "auto" }}><table style={{ ...S.table, width: "100%" }}><thead><tr><th>Об'єкт</th><th>Кухня</th><th>Бар</th><th>Загальна каса</th><th>Особисті каси офіціантів</th><th>Накопичено %</th></tr></thead><tbody>{POINTS.map((point) => <tr key={point}><td><b>{point}</b></td><td>{money(monthCashSummary[point].kitchen)}</td><td>{money(monthCashSummary[point].bar)}</td><td>{money(monthCashSummary[point].total)}</td><td>{point === "Полум'я" ? money(monthCashSummary[point].waiter) : "—"}</td><td>{money(accrual.byPoint[point]?.total || 0)}</td></tr>)}</tbody></table></div>
-      <div style={{ ...S.card, marginTop: 14, background: "#2a2722" }}><h3 style={S.h3}>🏆 Найкращий офіціант місяця</h3>{bestWaiter && (waiterMonthCash[bestWaiter.id] || 0) > 0 ? <div style={S.emberAmount}>{bestWaiter.name} · {money(waiterMonthCash[bestWaiter.id])}</div> : <p style={S.hint}>Особисті каси офіціантів за цей місяць ще не внесені.</p>}</div>
-      <h3 style={{ ...S.h3, marginTop: 18 }}>Каса кожного офіціанта за місяць</h3>{waiters.map((p) => <div key={p.id} style={S.lineRow}><span>{p.name}</span><b>{money(waiterMonthCash[p.id] || 0)}</b></div>)}
+      <div style={S.sectionHead}>
+        <h2 style={S.h2}>Місячний фінансовий звіт</h2>
+        <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}><MonthNav month={month} setMonth={setMonth} /><button style={S.ghost} onClick={exportCsv}>Експорт CSV</button></div>
+      </div>
+
+      <div style={S.stats}>
+        {POINTS.map((point) => (
+          <Stat key={point} title={`${point} · каса`} value={money(monthCashSummary[point].total)} />
+        ))}
+      </div>
+
+      <div className="finance-report">
+        <div className="finance-report-head">
+          <span>Об’єкт</span><span>Кухня</span><span>Бар</span><span>Загальна каса</span><span>Особисті каси</span><span>Нараховано %</span>
+        </div>
+        {POINTS.map((point) => (
+          <div className="finance-report-row" key={point}>
+            <div className="finance-title">{point}</div>
+            <div><small>Кухня</small><b>{money(monthCashSummary[point].kitchen)}</b></div>
+            <div><small>Бар</small><b>{money(monthCashSummary[point].bar)}</b></div>
+            <div><small>Загальна каса</small><b>{money(monthCashSummary[point].total)}</b></div>
+            <div><small>Особисті каси</small><b>{point === "Полум'я" ? money(monthCashSummary[point].waiter) : "—"}</b></div>
+            <div><small>Нараховано %</small><b style={{ color: "#ff9a64" }}>{money(accrual.byPoint[point]?.total || 0)}</b></div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ ...S.card, marginTop: 16, background: "#2a2722", textAlign: "center" }}>
+        <h3 style={S.h3}>🏆 Найкращий офіціант місяця</h3>
+        {bestWaiter && (waiterMonthCash[bestWaiter.id] || 0) > 0
+          ? <div style={S.emberAmount}>{bestWaiter.name} · {money(waiterMonthCash[bestWaiter.id])}</div>
+          : <p style={S.hint}>Особисті каси офіціантів за цей місяць ще не внесені.</p>}
+      </div>
+
+      <h3 style={{ ...S.h3, marginTop: 20 }}>Каса кожного офіціанта за місяць</h3>
+      <div className="waiter-report">
+        <div className="waiter-report-head"><span>Офіціант</span><span>Особиста каса</span><span>Нараховано офіціанту</span></div>
+        {waiters.map((person) => (
+          <div className="waiter-report-row" key={person.id}>
+            <span>{person.name}</span>
+            <b>{money(waiterMonthCash[person.id] || 0)}</b>
+            <b style={{ color: "#ff9a64" }}>{money(accrual.waiterDetails?.[person.id]?.netToWaiter || 0)}</b>
+          </div>
+        ))}
+      </div>
     </div>}
+
+    {tab === "requests" && <div style={S.card}><h2 style={S.h2}>Запити працівників</h2>{(requests||[]).length?(requests||[]).slice().reverse().map(r=><div key={r.id} style={S.requestAdmin}><div><b>{r.employeeName} · {r.type}</b><small style={S.smallText}>{r.point} · {new Date(r.createdAt).toLocaleString("uk-UA")}</small><p style={{margin:"7px 0"}}>{r.text}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{r.status==="new"?<><button style={S.primary} onClick={()=>decideRequest(r.id,"approved")}>Схвалити</button><button style={S.ghost} onClick={()=>decideRequest(r.id,"rejected")}>Відхилити</button></>:<b>{r.status==="approved"?"Схвалено":"Відхилено"}</b>}</div></div>):<p style={S.hint}>Нових запитів немає.</p>}</div>}
+
+    {tab === "announcements" && <div style={S.card}><h2 style={S.h2}>Оголошення для персоналу</h2><div style={S.formGrid}><Field label="Заголовок"><input style={S.inputFull} value={announcementForm.title} onChange={e=>setAnnouncementForm({...announcementForm,title:e.target.value})}/></Field><Field label="Показувати до"><input style={S.inputFull} type="date" value={announcementForm.expiresAt} onChange={e=>setAnnouncementForm({...announcementForm,expiresAt:e.target.value})}/></Field></div><textarea style={{...S.textarea,marginTop:10}} rows={4} placeholder="Текст оголошення" value={announcementForm.text} onChange={e=>setAnnouncementForm({...announcementForm,text:e.target.value})}/><button style={{...S.primary,marginTop:8}} onClick={createAnnouncement}>Опублікувати</button><div style={{marginTop:14}}>{(announcements||[]).slice().reverse().map(a=><div style={S.notice} key={a.id}><div style={S.sectionHead}><b>{a.title}</b><button style={S.ghost} onClick={()=>saveAnnouncements((announcements||[]).filter(x=>x.id!==a.id))}>Видалити</button></div><p>{a.text}</p><small>{a.author} · {new Date(a.createdAt).toLocaleString("uk-UA")}</small></div>)}</div></div>}
 
     {tab === "staff" && <div style={S.card}>
       <div style={S.sectionHead}><h2 style={S.h2}>Персонал</h2><button style={S.primary} onClick={() => setStaffForm({ name: "", point: "Полум'я", profession: "Офіціант", rate: "" })}>+ Додати</button></div>
@@ -763,9 +957,9 @@ function PercentEditor({ point, value, onChange }) {
   const update = (key, next) => onChange({ ...value, [key]: Number(next) || 0 });
   if (point !== "Полум'я") return <div style={S.formGrid}><PercentField label="Барменам від загальної каси, %" value={value.barRate} onChange={(v) => update("barRate", v)} /></div>;
   return <div style={S.formGrid}>
-    <PercentField label="Офіціанту від його особистої каси, %" value={value.waiterRate} onChange={(v) => update("waiterRate", v)} />
-    <PercentField label="Із фонду офіціанта бару, %" value={value.waiterBarShare} onChange={(v) => update("waiterBarShare", v)} />
-    <PercentField label="Із фонду офіціанта прибиранню, %" value={value.waiterCleaningShare} onChange={(v) => update("waiterCleaningShare", v)} />
+    <PercentField label="Офіціанту від особистої каси, %" value={value.waiterRate} onChange={(v) => update("waiterRate", v)} />
+    <PercentField label="Бару від особистої каси офіціанта, %" value={value.waiterBarRate} onChange={(v) => update("waiterBarRate", v)} />
+    <PercentField label="Прибиральниці від особистої каси офіціанта, %" value={value.waiterCleaningRate} onChange={(v) => update("waiterCleaningRate", v)} />
     <PercentField label="Кухні від кухонної каси, %" value={value.kitchenRate} onChange={(v) => update("kitchenRate", v)} />
     <PercentField label="Бару від барної каси, %" value={value.barRate} onChange={(v) => update("barRate", v)} />
     <PercentField label="Прибиральниці від кухонної каси, %" value={value.cleaningRate} onChange={(v) => update("cleaningRate", v)} />
@@ -818,6 +1012,21 @@ const S = {
   field: { color: "#fff", fontSize: 12.5, fontWeight: 600 },
   cashInputRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 4px", borderBottom: "1px solid #3b3730" },
   smallText: { display: "block", color: "#eee7dc", fontSize: 11.5, marginTop: 3 },
+  calendarGrid: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 },
+  calendarDay: { minHeight: 36, borderRadius: 8, display: "grid", placeItems: "center", background: "#2a2722", border: "1px solid #3b3730", color: "#fff", fontSize: 12 },
+  calendarFull: { background: "#e8763a", borderColor: "#e8763a" },
+  calendarHalf: { background: "linear-gradient(135deg,#e8763a 50%,#2a2722 50%)" },
+  calendarTraining: { background: "#766243" },
+  calendarOff: { background: "#64605a" },
+  notice: { background: "#2a2722", border: "1px solid #4a443b", borderRadius: 10, padding: 12, marginTop: 8, color: "#fff" },
+  badge: { display: "inline-block", background: "#2a2722", border: "1px solid #e8763a", color: "#fff", padding: "7px 10px", borderRadius: 18, margin: "4px 6px 4px 0", fontSize: 12 },
+  requestRow: { display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderBottom: "1px solid #3b3730", color: "#fff", fontSize: 12 },
+  requestAdmin: { display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#2a2722", border: "1px solid #3b3730", borderRadius: 10, padding: 12, marginTop: 8 },
+  progress: { height: 14, background: "#171512", border: "1px solid #3b3730", borderRadius: 20, overflow: "hidden", marginTop: 14 },
+  progressBar: { height: "100%", background: "#e8763a", borderRadius: 20 },
+  metricRow: { display: "grid", gridTemplateColumns: "1.2fr repeat(3,1fr)", gap: 8, padding: "11px 0", borderBottom: "1px solid #3b3730", color: "#fff" },
+  alertRow: { background: "#33251f", border: "1px solid #6f4531", color: "#ffd4cb", borderRadius: 8, padding: 10, marginTop: 7 },
+  auditRow: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", padding: "10px 0", borderBottom: "1px solid #3b3730", color: "#fff" },
   lineRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 4px", borderBottom: "1px solid #3b3730", color: "#fff" },
   detailBox: { background: "#2a2722", color: "#fff", borderRadius: 8, padding: 10, marginTop: 7, fontSize: 12.5, lineHeight: 1.5 },
   savedRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "10px 4px", borderBottom: "1px solid #3b3730" },
