@@ -37,15 +37,15 @@ const DEFAULT_PERCENT_RULES = {
     sources: ["kitchen", "bar"],
     labels: { kitchen: "Кухонна каса", bar: "Барна каса" },
     rules: {
-      "Бармен": { kitchen: 0.5, bar: 3 },
-      "Офіціант": { kitchen: 3.5, bar: 0 },
       "Кухар": { kitchen: 1.5, bar: 0 },
-      "Студент": { kitchen: 0, bar: 0 },
-      "Прибиральниця": { kitchen: 0.5, bar: 0 },
-      "Посудомийниця": { kitchen: 0, bar: 0 },
-      "Адміністратор": { kitchen: 0, bar: 0 },
-      "Менеджер": { kitchen: 0, bar: 0 },
-      "Інше": { kitchen: 0, bar: 0 },
+      "Бармен": { kitchen: 0, bar: 3 },
+      "Офіціант": { kitchen: 0, bar: 0 },
+      "Прибиральниця": { kitchen: 0, bar: 0 },
+    },
+    waiterPlan: {
+      totalCashPercent: 4.5,
+      barSharePercent: 10,
+      cleaningSharePercent: 10,
     },
   },
   "Підгір'я": {
@@ -95,6 +95,10 @@ const mergePercentRules = (saved = {}) => {
           { ...rates, ...(migratedRules[profession] || {}) },
         ])
       ),
+      waiterPlan: {
+        ...(base.waiterPlan || {}),
+        ...(custom.waiterPlan || {}),
+      },
     };
   });
 
@@ -212,6 +216,34 @@ const percentAccrual = (staff, shifts, cash, afterDay, percentRules = DEFAULT_PE
   const undistributedDays = [];
   const normalizedStaff = staff.map(normalizePerson);
 
+  const distributePool = (point, day, profession, pool) => {
+    if (pool <= 0) return;
+
+    const workers = normalizedStaff.filter((person) =>
+      person.point === point &&
+      person.profession === profession &&
+      (shifts[day]?.[person.id] === 1 || shifts[day]?.[person.id] === 0.5)
+    );
+    const weight = workers.reduce((sum, person) => sum + Number(shifts[day][person.id] || 0), 0);
+
+    byPoint[point] ||= { total: 0, undistributed: 0, perEmp: {} };
+
+    if (!weight) {
+      undistributed += pool;
+      byPoint[point].undistributed += pool;
+      if (!undistributedDays.includes(day)) undistributedDays.push(day);
+      return;
+    }
+
+    workers.forEach((person) => {
+      const share = pool * Number(shifts[day][person.id]) / weight;
+      perEmp[person.id] = (perEmp[person.id] || 0) + share;
+      byPoint[point].perEmp[person.id] = (byPoint[point].perEmp[person.id] || 0) + share;
+      byPoint[point].total += share;
+      total += share;
+    });
+  };
+
   Object.keys(cash).sort().forEach((day) => {
     if (afterDay && day <= afterDay) return;
 
@@ -220,37 +252,35 @@ const percentAccrual = (staff, shifts, cash, afterDay, percentRules = DEFAULT_PE
       const pointCash = getPointCash(cash, day, point);
       if (!config) return;
 
+      // Звичайні правила для кухні, бару та прибирання.
       Object.entries(config.rules || {}).forEach(([profession, rates]) => {
+        if (point === "Полум'я" && profession === "Офіціант") return;
+
         let pool = 0;
         (config.sources || []).forEach((source) => {
           pool += (Number(pointCash[source]) || 0) * (Number(rates[source]) || 0) / 100;
         });
         pool *= INTERNAL_NET_FACTOR;
-        if (pool <= 0) return;
-
-        const workers = normalizedStaff.filter((person) =>
-          person.point === point &&
-          person.profession === profession &&
-          (shifts[day]?.[person.id] === 1 || shifts[day]?.[person.id] === 0.5)
-        );
-        const weight = workers.reduce((sum, person) => sum + Number(shifts[day][person.id] || 0), 0);
-
-        byPoint[point] ||= { total: 0, undistributed: 0, perEmp: {} };
-        if (!weight) {
-          undistributed += pool;
-          byPoint[point].undistributed += pool;
-          if (!undistributedDays.includes(day)) undistributedDays.push(day);
-          return;
-        }
-
-        workers.forEach((person) => {
-          const share = pool * Number(shifts[day][person.id]) / weight;
-          perEmp[person.id] = (perEmp[person.id] || 0) + share;
-          byPoint[point].perEmp[person.id] = (byPoint[point].perEmp[person.id] || 0) + share;
-          byPoint[point].total += share;
-          total += share;
-        });
+        distributePool(point, day, profession, pool);
       });
+
+      // Полум'я: фонд офіціантів рахується від загальної каси.
+      // Після внутрішнього зменшення частина фонду переходить бару та прибиранню.
+      if (point === "Полум'я") {
+        const plan = {
+          ...DEFAULT_PERCENT_RULES[point].waiterPlan,
+          ...(config.waiterPlan || {}),
+        };
+        const totalCash = (Number(pointCash.kitchen) || 0) + (Number(pointCash.bar) || 0);
+        const cleanWaiterFund = totalCash * (Number(plan.totalCashPercent) || 0) / 100 * INTERNAL_NET_FACTOR;
+        const barPart = cleanWaiterFund * (Number(plan.barSharePercent) || 0) / 100;
+        const cleaningPart = cleanWaiterFund * (Number(plan.cleaningSharePercent) || 0) / 100;
+        const waiterPart = Math.max(0, cleanWaiterFund - barPart - cleaningPart);
+
+        distributePool(point, day, "Офіціант", waiterPart);
+        distributePool(point, day, "Бармен", barPart);
+        distributePool(point, day, "Прибиральниця", cleaningPart);
+      }
     });
   });
 
@@ -1412,7 +1442,73 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
 
           <div style={{ ...S.card, marginBottom: 12 }}>
             <h2 style={S.h2}>Правила % · {cashPoint}</h2>
-            <p style={{ ...S.hint, marginTop: 0 }}>Вкажи відсоток для кожної професії. Значення 0 означає, що відсоток не нараховується.</p>
+            <p style={{ ...S.hint, marginTop: 0 }}>
+              У розрахунку беруть участь тільки кухня, бар, офіціанти та прибиральниця. Усі умови можна змінити й повторно зберегти.
+            </p>
+
+            {cashPoint === "Полум'я" && (
+              <div style={{ ...S.formBox, marginBottom: 14 }}>
+                <div style={{ fontWeight: 700 }}>Фонд офіціантів від загальної каси</div>
+                <label style={S.fieldLabel}>
+                  Загальний відсоток офіціантів
+                  <input
+                    style={{ ...S.input, width: 100, marginLeft: 8 }}
+                    type="number" min="0" step="0.1"
+                    value={percentRulesDraft[cashPoint]?.waiterPlan?.totalCashPercent ?? 4.5}
+                    onChange={(e) => setPercentRulesDraft((prev) => ({
+                      ...prev,
+                      [cashPoint]: {
+                        ...prev[cashPoint],
+                        waiterPlan: {
+                          ...prev[cashPoint].waiterPlan,
+                          totalCashPercent: Number(e.target.value) || 0,
+                        },
+                      },
+                    }))}
+                  />
+                </label>
+                <label style={S.fieldLabel}>
+                  Частка бару з чистого фонду офіціантів
+                  <input
+                    style={{ ...S.input, width: 100, marginLeft: 8 }}
+                    type="number" min="0" max="100" step="0.1"
+                    value={percentRulesDraft[cashPoint]?.waiterPlan?.barSharePercent ?? 10}
+                    onChange={(e) => setPercentRulesDraft((prev) => ({
+                      ...prev,
+                      [cashPoint]: {
+                        ...prev[cashPoint],
+                        waiterPlan: {
+                          ...prev[cashPoint].waiterPlan,
+                          barSharePercent: Number(e.target.value) || 0,
+                        },
+                      },
+                    }))}
+                  />
+                </label>
+                <label style={S.fieldLabel}>
+                  Частка прибирання з чистого фонду офіціантів
+                  <input
+                    style={{ ...S.input, width: 100, marginLeft: 8 }}
+                    type="number" min="0" max="100" step="0.1"
+                    value={percentRulesDraft[cashPoint]?.waiterPlan?.cleaningSharePercent ?? 10}
+                    onChange={(e) => setPercentRulesDraft((prev) => ({
+                      ...prev,
+                      [cashPoint]: {
+                        ...prev[cashPoint],
+                        waiterPlan: {
+                          ...prev[cashPoint].waiterPlan,
+                          cleaningSharePercent: Number(e.target.value) || 0,
+                        },
+                      },
+                    }))}
+                  />
+                </label>
+                <div style={S.hint}>
+                  Після цих відрахувань залишок фонду автоматично розподіляється між офіціантами, які були на зміні.
+                </div>
+              </div>
+            )}
+
             {Object.entries(percentRulesDraft[cashPoint]?.rules || {}).map(([profession, rates]) => (
               <div key={profession} style={{ ...S.personRow, marginBottom: 8 }}>
                 <span style={{ fontWeight: 600 }}>{profession}</span>
@@ -1424,6 +1520,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                         style={{ ...S.input, width: 90, marginLeft: 6 }}
                         type="number" min="0" step="0.1"
                         value={rates[source] ?? 0}
+                        disabled={cashPoint === "Полум'я" && profession === "Офіціант"}
                         onChange={(e) => setPercentRulesDraft((prev) => ({
                           ...prev,
                           [cashPoint]: {
@@ -1440,7 +1537,7 @@ function AdminView({ me, staff, shifts, cash, payouts, rules, settings, today, l
                 </div>
               </div>
             ))}
-            <button style={S.primary} onClick={() => saveSettings({ ...settings, percentRules: percentRulesDraft })}>Зберегти правила %</button>
+            <button style={S.primary} onClick={() => saveSettings({ ...settings, percentRules: percentRulesDraft })}>Зберегти й оновити правила %</button>
           </div>
 
           <div style={S.card}>
