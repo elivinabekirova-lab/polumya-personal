@@ -1,4 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from "react";
+import {
+  enableShiftReminder,
+  disableShiftReminder,
+  isPushSupported,
+  isReminderEnabled
+} from "./pushNotifications.js";
 import { supabase } from "./supabase.js";
 
 // ─── «Полум'я та Підгір'я» · Журнал змін v3 ───
@@ -411,6 +417,113 @@ function Login({ staff, settings, onLogin }) {
   );
 }
 
+
+function ShiftReminderControl({ person }) {
+  const [enabled, setEnabled] = useState(() =>
+    isReminderEnabled(person.id)
+  );
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  const turnOn = async () => {
+    setBusy(true);
+    setStatus("");
+
+    try {
+      await enableShiftReminder(person);
+      setEnabled(true);
+      setStatus("✓ Нагадування о 12:00 увімкнено.");
+    } catch (error) {
+      setStatus(error?.message || "Не вдалося увімкнути сповіщення.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const turnOff = async () => {
+    setBusy(true);
+    setStatus("");
+
+    try {
+      await disableShiftReminder(person.id);
+      setEnabled(false);
+      setStatus("Нагадування вимкнено.");
+    } catch (error) {
+      setStatus(error?.message || "Не вдалося вимкнути сповіщення.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div
+      style={{
+        ...S.card,
+        marginBottom: 12,
+        borderColor: enabled ? "#6B7F5E" : "#E8763A"
+      }}
+    >
+      <h2 style={S.h2}>🔔 Нагадування про зміну</h2>
+
+      <div
+        style={{
+          color: "#F5EFE5",
+          fontSize: 13,
+          lineHeight: 1.5,
+          marginBottom: 12
+        }}
+      >
+        Щодня о 12:00 прийде сповіщення, якщо ти ще не
+        відмітив або не відмітила свою зміну.
+      </div>
+
+      {!isPushSupported() && (
+        <div
+          style={{
+            color: "#FFD4CB",
+            fontSize: 13,
+            marginBottom: 10
+          }}
+        >
+          На iPhone відкрий застосунок через іконку на
+          початковому екрані, а не у звичайній вкладці Safari.
+        </div>
+      )}
+
+      <button
+        style={{
+          ...S.primary,
+          background: enabled ? "#2A2722" : "#E8763A",
+          color: "#FFFFFF",
+          opacity: busy ? 0.6 : 1
+        }}
+        disabled={busy}
+        onClick={enabled ? turnOff : turnOn}
+      >
+        {busy
+          ? "Зачекай…"
+          : enabled
+            ? "Вимкнути нагадування"
+            : "Увімкнути нагадування о 12:00"}
+      </button>
+
+      {status && (
+        <div
+          style={{
+            color: status.startsWith("✓")
+              ? "#DCEAD4"
+              : "#F5EFE5",
+            fontSize: 13,
+            marginTop: 10
+          }}
+        >
+          {status}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─────────────── КАБІНЕТ СПІВРОБІТНИКА ───────────────
 function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, writeShift, today, onLogout, saveStatus, lastSync, onRefresh }) {
   const [period, setPeriod] = useState(() => periodOf(today));
@@ -479,6 +592,8 @@ function EmployeeView({ person, shifts, cash, staff, rules, lastPayoutDay, write
         {saveStatus?.state === "saved" && <div style={{ fontSize: 13, color: "#D5E2CE", marginTop: 6, fontWeight: 600 }}>✓ Збережено — адміністратор уже бачить твою відмітку.</div>}
         {saveStatus?.state === "error" && <div style={{ fontSize: 13, color: "#C96A5A", marginTop: 6, fontWeight: 600 }}>⚠ Не вдалося зберегти. Перевір інтернет і натисни кнопку ще раз.</div>}
       </div>
+
+      <ShiftReminderControl person={person} />
 
       {/* Особистий % */}
       {pct && (
