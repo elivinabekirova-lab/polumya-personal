@@ -23,7 +23,7 @@ const K_AUDIT = "flame:audit";
 const POINTS = ["Полум'я", "Підгір'я", "SPA"];
 const PROFESSIONS = {
   "Полум'я": ["Офіціант", "Бармен", "Кухня", "Прибиральниця", "Студент"],
-  "Підгір'я": ["Бармен"],
+  "Підгір'я": ["Бармен", "Кухня"],
   SPA: ["Бармен"],
 };
 const PERCENT_PROFESSIONS = ["Офіціант", "Бармен", "Кухня", "Прибиральниця"];
@@ -44,23 +44,17 @@ const DEFAULT_PERCENT_RULES = {
     waiterCleaningRate: 0.5,
     kitchenRate: 1.5,
     barRate: 3,
-    cleaningRate: 0.5,
+    cleaningRate: 0,
   },
   "Підгір'я": {
-    waiterRate: 0,
-    waiterBarRate: 0,
-    waiterCleaningRate: 0,
-    kitchenRate: 0,
-    barRate: 3,
-    cleaningRate: 0,
+    pointRate: 5,
+    kitchenShare: 30,
+    hallShare: 70,
+    roomServiceToHall: true,
   },
   SPA: {
-    waiterRate: 0,
-    waiterBarRate: 0,
-    waiterCleaningRate: 0,
-    kitchenRate: 0,
-    barRate: 3,
-    cleaningRate: 0,
+    pointRate: 5,
+    hookahUnitRate: 130,
   },
 };
 
@@ -164,11 +158,11 @@ const periodStats = (shifts, p) => {
   const out = {};
   periodDates(p).forEach((day) => {
     Object.entries(shifts[day] || {}).forEach(([id, value]) => {
-      if (!isPaidShift(value)) return;
-      if (!out[id]) out[id] = { full: 0, half: 0, total: 0 };
-      if (value === 1) out[id].full += 1;
-      if (value === 0.5) out[id].half += 1;
-      out[id].total += value;
+      if (value !== 1 && value !== 0.5 && value !== "training") return;
+      if (!out[id]) out[id] = { full: 0, half: 0, training: 0, total: 0 };
+      if (value === 1) { out[id].full += 1; out[id].total += 1; }
+      if (value === 0.5) { out[id].half += 1; out[id].total += 0.5; }
+      if (value === "training") { out[id].training += 1; out[id].total += 0.5; }
     });
   });
   return out;
@@ -182,6 +176,8 @@ function getPointCash(cash, day, point) {
       bar: Number(dayRecord.bar) || 0,
       total: (Number(dayRecord.kitchen) || 0) + (Number(dayRecord.bar) || 0),
       waiterCash: dayRecord.waiterCash || {},
+      roomService: Number(dayRecord.roomService) || 0,
+      hookahs: Number(dayRecord.hookahs) || 0,
       savedAt: dayRecord.savedAt || null,
     };
   }
@@ -191,6 +187,8 @@ function getPointCash(cash, day, point) {
     bar: Number(rec.bar) || 0,
     total: Number(rec.total) || 0,
     waiterCash: rec.waiterCash || {},
+    roomService: Number(rec.roomService) || 0,
+    hookahs: Number(rec.hookahs) || 0,
     savedAt: rec.savedAt || null,
   };
 }
@@ -260,10 +258,16 @@ function calculateAccrual(staffInput, shifts, cash, afterDay, rulesInput) {
         distributePool({ pool: kitchenPool, profession: "Кухня", point, day, staff, shifts, perEmp, byPoint, undistributed });
         distributePool({ pool: barOwnPool + barTransfer, profession: "Бармен", point, day, staff, shifts, perEmp, byPoint, undistributed });
         distributePool({ pool: cleaningOwnPool + cleaningTransfer, profession: "Прибиральниця", point, day, staff, shifts, perEmp, byPoint, undistributed });
-      } else {
-        const base = c.total || c.bar || c.kitchen;
-        const barPool = base * (Number(r.barRate) || 0) / 100 * netFactor;
-        distributePool({ pool: barPool, profession: "Бармен", point, day, staff, shifts, perEmp, byPoint, undistributed });
+      } else if (point === "Підгір'я") {
+        const totalFund = c.total * (Number(r.pointRate) || 0) / 100 * netFactor;
+        const kitchenPool = totalFund * (Number(r.kitchenShare) || 0) / 100;
+        const hallPool = totalFund * (Number(r.hallShare) || 0) / 100 + (Number(c.roomService) || 0);
+        distributePool({ pool: kitchenPool, profession: "Кухня", point, day, staff, shifts, perEmp, byPoint, undistributed });
+        distributePool({ pool: hallPool, profession: "Бармен", point, day, staff, shifts, perEmp, byPoint, undistributed });
+      } else if (point === "SPA") {
+        const percentPool = c.total * (Number(r.pointRate) || 0) / 100 * netFactor;
+        const hookahPool = (Number(c.hookahs) || 0) * (Number(r.hookahUnitRate) || 0);
+        distributePool({ pool: percentPool + hookahPool, profession: "Бармен", point, day, staff, shifts, perEmp, byPoint, undistributed });
       }
 
       if (byPoint[point].undistributed > 0 && !undistributedDays.includes(day)) undistributedDays.push(day);
@@ -663,7 +667,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
   const [tab, setTab] = useState("control");
   const [selectedDay, setSelectedDay] = useState(todayKey);
   const [cashPoint, setCashPoint] = useState("Полум'я");
-  const [cashDraft, setCashDraft] = useState({ kitchen: "", bar: "", total: "", waiterCash: {} });
+  const [cashDraft, setCashDraft] = useState({ kitchen: "", bar: "", total: "", waiterCash: {}, roomService: "", hookahs: "" });
   const [period, setPeriod] = useState(() => periodOf(today));
   const [month, setMonth] = useState(() => new Date(today.getFullYear(), today.getMonth(), 1));
   const [staffForm, setStaffForm] = useState(null);
@@ -683,6 +687,8 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
       bar: rec.bar ? String(rec.bar) : "",
       total: rec.total ? String(rec.total) : "",
       waiterCash: Object.fromEntries(Object.entries(rec.waiterCash || {}).map(([id, value]) => [id, value ? String(value) : ""])),
+      roomService: rec.roomService ? String(rec.roomService) : "",
+      hookahs: rec.hookahs ? String(rec.hookahs) : "",
     });
   }, [cash, selectedDay, cashPoint]);
 
@@ -700,7 +706,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
   const monthDays = new Date(month.getFullYear(), month.getMonth() + 1, 0).getDate();
 
   const monthCashSummary = useMemo(() => {
-    const summary = Object.fromEntries(POINTS.map((point) => [point, { kitchen: 0, bar: 0, total: 0, waiter: 0 }]));
+    const summary = Object.fromEntries(POINTS.map((point) => [point, { kitchen: 0, bar: 0, total: 0, waiter: 0, roomService: 0, hookahs: 0 }]));
     Object.keys(cash).filter((day) => day.startsWith(monthPrefix)).forEach((day) => {
       POINTS.forEach((point) => {
         const rec = getPointCash(cash, day, point);
@@ -708,6 +714,8 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
         summary[point].bar += rec.bar;
         summary[point].total += rec.total || rec.kitchen + rec.bar;
         summary[point].waiter += Object.values(rec.waiterCash || {}).reduce((s, value) => s + (Number(value) || 0), 0);
+        summary[point].roomService += Number(rec.roomService) || 0;
+        summary[point].hookahs += Number(rec.hookahs) || 0;
       });
     });
     return summary;
@@ -753,7 +761,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
   const saveMonthPlan = async () => { const next={...(plans||{}),[planKey]:Number(planDraft)||0}; await savePlans(next); await addAudit("Оновлено місячний план", `${planKey}: ${money(next[planKey])}`); };
   const toggleMonthClose = async () => { const next=monthClosed?(closedMonths||[]).filter(x=>x!==monthPrefix):[...(closedMonths||[]),monthPrefix]; await saveClosedMonths(next); await addAudit(monthClosed?"Відкрито місяць":"Закрито місяць",monthPrefix); };
   const applyMassStatus = async () => { if(!confirm(`Встановити статус усім працівникам ${massPoint} за ${dayLabel(selectedDay)}?`)) return; let next={...(shifts||{}),[selectedDay]:{...(shifts[selectedDay]||{})}}; normalizedStaff.filter(p=>p.point===massPoint).forEach(p=>{next[selectedDay][p.id]=massStatus}); await sSet(K_SHIFTS,next,true); window.location.reload(); };
-  const exportCsv = () => { const rows=[["Об’єкт","Кухня","Бар","Загальна каса","Особисті каси","Нараховано %"],...POINTS.map(p=>[p,monthCashSummary[p].kitchen,monthCashSummary[p].bar,monthCashSummary[p].total,monthCashSummary[p].waiter,accrual.byPoint[p]?.total||0])]; const csv=rows.map(r=>r.join(";")).join("\n"); const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`fin-report-${monthPrefix}.csv`; a.click(); URL.revokeObjectURL(a.href); };
+  const exportCsv = () => { const rows=[["Об’єкт","Кухня","Бар","Загальна каса","Особисті каси","Room service","Кальяни","Нараховано %"],...POINTS.map(p=>[p,monthCashSummary[p].kitchen,monthCashSummary[p].bar,monthCashSummary[p].total,monthCashSummary[p].waiter,monthCashSummary[p].roomService,monthCashSummary[p].hookahs,accrual.byPoint[p]?.total||0])]; const csv=rows.map(r=>r.join(";")).join("\n"); const blob=new Blob(["\ufeff"+csv],{type:"text/csv;charset=utf-8"}); const a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=`fin-report-${monthPrefix}.csv`; a.click(); URL.revokeObjectURL(a.href); };
 
   const submitStaff = async () => {
     if (!staffForm?.name?.trim()) return;
@@ -775,7 +783,9 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
           total: (Number(cashDraft.kitchen) || 0) + (Number(cashDraft.bar) || 0),
           waiterCash: Object.fromEntries(Object.entries(cashDraft.waiterCash || {}).filter(([, value]) => Number(value) > 0).map(([id, value]) => [id, Number(value)])),
         }
-      : { total: Number(cashDraft.total) || 0, kitchen: 0, bar: Number(cashDraft.total) || 0, waiterCash: {} };
+      : cashPoint === "Підгір'я"
+        ? { total: Number(cashDraft.total) || 0, kitchen: 0, bar: 0, waiterCash: {}, roomService: Number(cashDraft.roomService) || 0, hookahs: 0 }
+        : { total: Number(cashDraft.total) || 0, kitchen: 0, bar: 0, waiterCash: {}, roomService: 0, hookahs: Number(cashDraft.hookahs) || 0 };
     const ok = await writeCash(selectedDay, cashPoint, entry);
     setCashMessage(ok ? `✓ Касу за ${dayLabel(selectedDay)} збережено та % перераховано.` : "Не вдалося зберегти касу");
   };
@@ -835,7 +845,14 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
             <Field label="Барна каса"><input style={S.inputFull} type="number" min="0" value={cashDraft.bar} onChange={(e) => setCashDraft({ ...cashDraft, bar: e.target.value })} /></Field>
           </div>
           <div style={{ marginTop: 16 }}><div style={S.label}>Особиста каса кожного офіціанта</div>{waiters.map((p) => <div key={p.id} style={S.cashInputRow}><span><b>{p.name}</b><small style={S.smallText}>Його % рахується лише від цієї суми</small></span><input style={{ ...S.input, width: 160 }} type="number" min="0" placeholder="0" value={cashDraft.waiterCash[p.id] || ""} onChange={(e) => setCashDraft({ ...cashDraft, waiterCash: { ...cashDraft.waiterCash, [p.id]: e.target.value } })} /></div>)}</div>
-        </> : <Field label={`Загальна каса · ${cashPoint}`}><input style={{ ...S.inputFull, maxWidth: 340 }} type="number" min="0" value={cashDraft.total} onChange={(e) => setCashDraft({ ...cashDraft, total: e.target.value })} /></Field>}
+        </> : cashPoint === "Підгір'я" ? <div style={S.formGrid}>
+          <Field label="Загальна каса · Підгір’я"><input style={S.inputFull} type="number" min="0" value={cashDraft.total} onChange={(e) => setCashDraft({ ...cashDraft, total: e.target.value })} /></Field>
+          <Field label="Room service, ₴ (окремо)"><input style={S.inputFull} type="number" min="0" value={cashDraft.roomService} onChange={(e) => setCashDraft({ ...cashDraft, roomService: e.target.value })} /></Field>
+        </div> : <div style={S.formGrid}>
+          <Field label="Загальна каса · SPA"><input style={S.inputFull} type="number" min="0" value={cashDraft.total} onChange={(e) => setCashDraft({ ...cashDraft, total: e.target.value })} /></Field>
+          <Field label="Кількість кальянів"><input style={S.inputFull} type="number" min="0" step="1" value={cashDraft.hookahs} onChange={(e) => setCashDraft({ ...cashDraft, hookahs: e.target.value })} /></Field>
+          <div style={S.detailBox}>Кальяни: {Number(cashDraft.hookahs) || 0} × {money((percentDraft.SPA || DEFAULT_PERCENT_RULES.SPA).hookahUnitRate)} = <b>{money((Number(cashDraft.hookahs) || 0) * Number((percentDraft.SPA || DEFAULT_PERCENT_RULES.SPA).hookahUnitRate || 0))}</b></div>
+        </div>}
         <button style={{ ...S.primary, marginTop: 14 }} onClick={saveCashNow}>Зберегти касу та перерахувати %</button>
         {cashMessage && <p style={cashMessage.startsWith("✓") ? S.success : S.error}>{cashMessage}</p>}
       </div>
@@ -858,7 +875,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
       <div style={S.card}>
         <h2 style={S.h2}>Збережені каси</h2>
         {recentCashRows.length ? recentCashRows.map(({ day, point, rec }) => <div key={`${day}-${point}`} style={S.savedRow}>
-          <div><b>{dayLabel(day)} · {point}</b><small style={S.smallText}>{point === "Полум'я" ? `Кухня ${money(rec.kitchen)} · Бар ${money(rec.bar)}` : `Каса ${money(rec.total)}`}</small></div>
+          <div><b>{dayLabel(day)} · {point}</b><small style={S.smallText}>{point === "Полум'я" ? `Кухня ${money(rec.kitchen)} · Бар ${money(rec.bar)}` : point === "Підгір'я" ? `Каса ${money(rec.total)} · Room service ${money(rec.roomService)}` : `Каса ${money(rec.total)} · Кальяни ${rec.hookahs} шт. (${money(rec.hookahs * Number((settings.percentRules?.SPA || DEFAULT_PERCENT_RULES.SPA).hookahUnitRate || 0))})`}</small></div>
           <div style={{ textAlign: "right" }}><b>{money(point === "Полум'я" ? rec.kitchen + rec.bar : rec.total)}</b><small style={S.smallText}>{Object.values(rec.waiterCash || {}).reduce((s, value) => s + Number(value || 0), 0) > 0 ? `Особисті каси: ${money(Object.values(rec.waiterCash).reduce((s, value) => s + Number(value || 0), 0))}` : ""}</small></div>
         </div>) : <p style={S.hint}>Ще немає збережених кас.</p>}
       </div>
@@ -877,9 +894,9 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
 
     {tab === "pay" && <div style={S.card}>
       <PeriodNav period={period} setPeriod={setPeriod} />
-      <div style={{ overflowX: "auto", marginTop: 14 }}><table style={{ ...S.table, width: "100%" }}><thead><tr><th>Працівник</th><th>Точка</th><th>Професія</th><th>Повних</th><th>½</th><th>Змін</th><th>Ставка</th><th>За зміни</th><th>%</th></tr></thead><tbody>{normalizedStaff.map((p) => {
-        const st = stats[p.id] || { full: 0, half: 0, total: 0 };
-        return <tr key={p.id}><td>{p.name}</td><td>{p.point}</td><td>{p.profession}</td><td>{st.full}</td><td>{st.half}</td><td>{fmt(st.total)}</td><td>{money(p.rate)}</td><td>{money(st.total * p.rate)}</td><td>{PERCENT_PROFESSIONS.includes(p.profession) ? money(accrual.perEmp[p.id] || 0) : "—"}</td></tr>;
+      <div style={{ overflowX: "auto", marginTop: 14 }}><table style={{ ...S.table, width: "100%" }}><thead><tr><th>Працівник</th><th>Точка</th><th>Професія</th><th>Повних</th><th>½</th><th>Стаж.</th><th>Оплач. змін</th><th>Ставка</th><th>За зміни</th><th>%</th></tr></thead><tbody>{normalizedStaff.map((p) => {
+        const st = stats[p.id] || { full: 0, half: 0, training: 0, total: 0 };
+        return <tr key={p.id}><td>{p.name}</td><td>{p.point}</td><td>{p.profession}</td><td>{st.full}</td><td>{st.half}</td><td>{st.training}</td><td>{fmt(st.total)}</td><td>{money(p.rate)}</td><td>{money(st.total * p.rate)}</td><td>{PERCENT_PROFESSIONS.includes(p.profession) ? money(accrual.perEmp[p.id] || 0) : "—"}</td></tr>;
       })}</tbody></table></div>
     </div>}
 
@@ -955,7 +972,15 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
 
 function PercentEditor({ point, value, onChange }) {
   const update = (key, next) => onChange({ ...value, [key]: Number(next) || 0 });
-  if (point !== "Полум'я") return <div style={S.formGrid}><PercentField label="Барменам від загальної каси, %" value={value.barRate} onChange={(v) => update("barRate", v)} /></div>;
+  if (point === "Підгір'я") return <div style={S.formGrid}>
+    <PercentField label="Загальний фонд від каси, %" value={value.pointRate} onChange={(v) => update("pointRate", v)} />
+    <PercentField label="Частка кухні з фонду, %" value={value.kitchenShare} onChange={(v) => update("kitchenShare", v)} />
+    <PercentField label="Частка залу з фонду, %" value={value.hallShare} onChange={(v) => update("hallShare", v)} />
+  </div>;
+  if (point === "SPA") return <div style={S.formGrid}>
+    <PercentField label="Бармену від загальної каси, %" value={value.pointRate} onChange={(v) => update("pointRate", v)} />
+    <PercentField label="Оплата за 1 кальян, ₴" value={value.hookahUnitRate} onChange={(v) => update("hookahUnitRate", v)} />
+  </div>;
   return <div style={S.formGrid}>
     <PercentField label="Офіціанту від особистої каси, %" value={value.waiterRate} onChange={(v) => update("waiterRate", v)} />
     <PercentField label="Бару від особистої каси офіціанта, %" value={value.waiterBarRate} onChange={(v) => update("waiterBarRate", v)} />
