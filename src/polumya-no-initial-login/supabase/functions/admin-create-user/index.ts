@@ -13,21 +13,12 @@ Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: corsHeaders });
   try {
     const authHeader = req.headers.get("Authorization") || "";
-    const admin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-      { global: { headers: { Authorization: authHeader } } },
-    );
-
     const token = authHeader.replace("Bearer ", "");
-    const { data: userData, error: userError } = await admin.auth.getUser(token);
+    const service = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const { data: userData, error: userError } = await service.auth.getUser(token);
     if (userError || !userData.user) throw new Error("Потрібна авторизація адміністратора");
 
-    const { data: caller } = await admin
-      .from("profiles")
-      .select("role, active")
-      .eq("user_id", userData.user.id)
-      .maybeSingle();
+    const { data: caller } = await service.from("profiles").select("role, active").eq("user_id", userData.user.id).maybeSingle();
     if (caller?.role !== "admin" || !caller.active) throw new Error("Недостатньо прав");
 
     const body = await req.json();
@@ -36,14 +27,11 @@ Deno.serve(async (req) => {
     const name = String(body.name || "").trim();
     const staffId = String(body.staffId || "").trim();
     const role = body.role === "admin" ? "admin" : "employee";
-    if (!login || password.length < 6 || !name) throw new Error("Логін, ім’я та пароль від 6 символів обов’язкові");
+    if (!login || password.length < 8 || !name) throw new Error("Логін, ім’я та пароль від 8 символів обов’язкові");
 
     const email = `${login}@${AUTH_EMAIL_DOMAIN}`;
-    const service = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
     const { data: created, error: createError } = await service.auth.admin.createUser({
-      email,
-      password,
-      email_confirm: true,
+      email, password, email_confirm: true,
       user_metadata: { display_name: name, login },
     });
     if (createError) throw createError;
@@ -62,7 +50,7 @@ Deno.serve(async (req) => {
       throw profileError;
     }
 
-    return new Response(JSON.stringify({ ok: true, userId: created.user.id, login }), { headers: corsHeaders });
+    return new Response(JSON.stringify({ ok: true, userId: created.user.id, login, email }), { headers: corsHeaders });
   } catch (error) {
     return new Response(JSON.stringify({ ok: false, error: error instanceof Error ? error.message : "Помилка" }), { status: 400, headers: corsHeaders });
   }

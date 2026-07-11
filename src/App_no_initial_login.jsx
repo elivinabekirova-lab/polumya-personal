@@ -20,7 +20,11 @@ const K_PLANS = "flame:plans";
 const K_CLOSED_MONTHS = "flame:closedMonths";
 const K_AUDIT = "flame:audit";
 const AUTH_EMAIL_DOMAIN = "staff.polumya.app";
-const loginToEmail = (login) => `${String(login || "").trim().toLowerCase().replace(/[^a-z0-9._-]/g, "")}@${AUTH_EMAIL_DOMAIN}`;
+const loginToEmail = (login) => {
+  const value = String(login || "").trim().toLowerCase();
+  if (value.includes("@")) return value;
+  return `${value.replace(/[^a-z0-9._-]/g, "")}@${AUTH_EMAIL_DOMAIN}`;
+};
 
 const POINTS = ["Полум'я", "Підгір'я", "SPA"];
 const PROFESSIONS = {
@@ -543,10 +547,28 @@ function Brand({ small = false }) {
 }
 
 function AuthLogin() {
+  const [mode, setMode] = useState("checking");
   const [login, setLogin] = useState("");
   const [pass, setPass] = useState("");
+  const [displayName, setDisplayName] = useState("Еля");
+  const [confirmPass, setConfirmPass] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    let active = true;
+    supabase.functions.invoke("bootstrap-admin", { body: { action: "status" } })
+      .then(({ data, error: fnError }) => {
+        if (!active) return;
+        if (fnError) {
+          setError("Не вдалося перевірити налаштування авторизації");
+          setMode("login");
+          return;
+        }
+        setMode(data?.needsSetup ? "setup" : "login");
+      });
+    return () => { active = false; };
+  }, []);
 
   const enter = async () => {
     if (!login.trim() || !pass) { setError("Введи логін і пароль"); return; }
@@ -558,6 +580,65 @@ function AuthLogin() {
     if (authError) setError("Невірний логін або пароль");
     setBusy(false);
   };
+
+  const createFirstAdmin = async () => {
+    const cleanLogin = String(login || "").trim().toLowerCase();
+    if (!displayName.trim()) { setError("Введи своє ім’я"); return; }
+    if (!cleanLogin) { setError("Придумай логін"); return; }
+    if (pass.length < 8) { setError("Пароль має містити щонайменше 8 символів"); return; }
+    if (pass !== confirmPass) { setError("Паролі не збігаються"); return; }
+
+    setBusy(true); setError("");
+    const { data, error: fnError } = await supabase.functions.invoke("bootstrap-admin", {
+      body: {
+        action: "create",
+        login: cleanLogin,
+        password: pass,
+        displayName: displayName.trim(),
+      },
+    });
+    if (fnError || !data?.ok) {
+      setError(data?.error || fnError?.message || "Не вдалося створити адміністратора");
+      setBusy(false);
+      return;
+    }
+
+    const { error: authError } = await supabase.auth.signInWithPassword({
+      email: data.email || loginToEmail(cleanLogin),
+      password: pass,
+    });
+    if (authError) {
+      setError("Адміністратора створено. Спробуй увійти під щойно створеними даними.");
+      setMode("login");
+    }
+    setBusy(false);
+  };
+
+  if (mode === "checking") {
+    return <main style={{ maxWidth: 460, margin: "0 auto", paddingTop: 70 }}>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}><Brand /></div>
+      <div style={S.card}><Centered>Перевіряємо налаштування…</Centered></div>
+    </main>;
+  }
+
+  if (mode === "setup") {
+    return <main style={{ maxWidth: 460, margin: "0 auto", paddingTop: 34 }}>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 20 }}><Brand /></div>
+      <div style={S.card}>
+        <h2 style={{ ...S.h2, textAlign: "center" }}>Створення головного адміністратора</h2>
+        <p style={S.subtleCenter}>Придумай власний логін і пароль. Це робиться лише один раз.</p>
+        <div style={{ display: "grid", gap: 10 }}>
+          <input style={{ ...S.input, width: "100%" }} placeholder="Твоє ім’я" value={displayName} onChange={(e) => setDisplayName(e.target.value)} />
+          <input style={{ ...S.input, width: "100%" }} autoCapitalize="none" autoCorrect="off" placeholder="Придумай логін" value={login} onChange={(e) => setLogin(e.target.value)} />
+          <input style={{ ...S.input, width: "100%" }} type="password" placeholder="Придумай пароль" value={pass} onChange={(e) => setPass(e.target.value)} />
+          <input style={{ ...S.input, width: "100%" }} type="password" placeholder="Повтори пароль" value={confirmPass} onChange={(e) => setConfirmPass(e.target.value)} onKeyDown={(e) => e.key === "Enter" && createFirstAdmin()} />
+          <button style={S.primary} disabled={busy} onClick={createFirstAdmin}>{busy ? "Створюємо…" : "Створити адміністратора"}</button>
+        </div>
+        {error && <div style={S.error}>{error}</div>}
+        <p style={{ ...S.hint, marginTop: 12 }}>Пароль не показується і не зберігається відкритим текстом. Після входу сесія залишиться на цьому телефоні.</p>
+      </div>
+    </main>;
+  }
 
   return <main style={{ maxWidth: 460, margin: "0 auto", paddingTop: 48 }}>
     <div style={{ display: "flex", justifyContent: "center", marginBottom: 24 }}><Brand /></div>
@@ -794,6 +875,18 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
     return { ok: true, userId: data.userId };
   };
 
+  const resetStaffPassword = async (person) => {
+    const nextPassword = window.prompt(`Новий пароль для ${person.name} (мінімум 8 символів):`);
+    if (!nextPassword) return;
+    if (nextPassword.length < 8) { alert("Пароль має містити щонайменше 8 символів"); return; }
+    const { data, error } = await supabase.functions.invoke("admin-reset-password", {
+      body: { userId: person.authUserId, login: person.login, password: nextPassword },
+    });
+    if (error || !data?.ok) { alert(data?.error || error?.message || "Не вдалося змінити пароль"); return; }
+    await addAudit("Змінено пароль працівника", person.name);
+    alert(`Пароль для ${person.name} змінено. Передай його працівнику особисто.`);
+  };
+
   const submitStaff = async () => {
     if (!staffForm?.name?.trim()) return;
     const point = staffForm.point || "Полум'я";
@@ -1011,7 +1104,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
           <input style={S.input} type="password" placeholder={staffForm.id ? "Новий пароль (необов’язково)" : "Тимчасовий пароль"} value={staffForm.password || ""} onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })} />
         <div><button style={S.primary} onClick={submitStaff}>Зберегти</button> <button style={S.ghost} onClick={() => setStaffForm(null)}>Скасувати</button></div>
       </div>}
-      {POINTS.map((point) => <section key={point}><div style={S.label}>{point}</div>{normalizedStaff.filter((p) => p.point === point).map((p) => <div key={p.id} style={S.row}><span><b>{p.name}</b><small style={S.smallText}>{p.profession} · {p.rate ? `${money(p.rate)}/зміна` : "ставку не задано"}</small></span><span><button style={S.ghost} onClick={() => setStaffForm({ ...p, rate: String(p.rate || ""), login: p.login || "", password: "" })}>Змінити</button> <button style={{ ...S.ghost, color: "#ffd4cb" }} onClick={() => confirm(`Видалити ${p.name}?`) && saveStaff(normalizedStaff.filter((x) => x.id !== p.id))}>Видалити</button></span></div>)}</section>)}
+      {POINTS.map((point) => <section key={point}><div style={S.label}>{point}</div>{normalizedStaff.filter((p) => p.point === point).map((p) => <div key={p.id} style={S.row}><span><b>{p.name}</b><small style={S.smallText}>{p.profession} · {p.rate ? `${money(p.rate)}/зміна` : "ставку не задано"}</small></span><span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}><button style={S.ghost} onClick={() => setStaffForm({ ...p, rate: String(p.rate || ""), login: p.login || "", password: "" })}>Змінити</button>{p.authUserId && <button style={S.ghost} onClick={() => resetStaffPassword(p)}>Новий пароль</button>}<button style={{ ...S.ghost, color: "#ffd4cb" }} onClick={() => confirm(`Видалити ${p.name}?`) && saveStaff(normalizedStaff.filter((x) => x.id !== p.id))}>Видалити</button></span></div>)}</section>)}
     </div>}
 
     {tab === "rules" && <div style={S.card}><h2 style={S.h2}>Правила</h2><textarea style={S.textarea} rows={16} value={rulesDraft} onChange={(e) => setRulesDraft(e.target.value)} /><button style={{ ...S.primary, marginTop: 10 }} onClick={() => saveRules(rulesDraft)}>Зберегти правила</button></div>}
