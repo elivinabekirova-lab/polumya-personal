@@ -5,6 +5,51 @@ import App from './App.jsx'
 
 import { registerSW } from "virtual:pwa-register";
 
+const PWA_RESET_VERSION = "polumya-reset-v3";
+
+async function resetOldPwaOnce() {
+  if (!("serviceWorker" in navigator)) return;
+
+  if (localStorage.getItem(PWA_RESET_VERSION) === "done") {
+    return;
+  }
+
+  try {
+    const registrations =
+      await navigator.serviceWorker.getRegistrations();
+
+    await Promise.all(
+      registrations.map((registration) =>
+        registration.unregister()
+      )
+    );
+
+    if ("caches" in window) {
+      const cacheNames = await caches.keys();
+
+      await Promise.all(
+        cacheNames.map((cacheName) =>
+          caches.delete(cacheName)
+        )
+      );
+    }
+
+    localStorage.setItem(PWA_RESET_VERSION, "done");
+
+    window.location.replace(
+      window.location.origin +
+      window.location.pathname +
+      "?updated=" +
+      Date.now()
+    );
+  } catch (error) {
+    console.error("PWA reset error", error);
+  }
+}
+
+resetOldPwaOnce();
+
+
 const updateSW = registerSW({
   immediate: true,
   onRegisteredSW(_swUrl, registration) {
