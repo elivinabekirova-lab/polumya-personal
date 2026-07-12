@@ -574,14 +574,58 @@ function AuthLogin() {
   }, []);
 
   const enter = async () => {
-    if (!login.trim() || !pass) { setError("Введи логін і пароль"); return; }
-    setBusy(true); setError("");
-    const { error: authError } = await supabase.auth.signInWithPassword({
-      email: login.trim().includes("@") ? login.trim().toLowerCase() : loginToEmail(login),
-      password: pass,
-    });
-    if (authError) setError(authError.message || "Невірний логін або пароль");
-    setBusy(false);
+    const cleanLogin = String(login || "").trim().toLowerCase();
+
+    if (!cleanLogin || !pass) {
+      setError("Введи логін і пароль");
+      return;
+    }
+
+    setBusy(true);
+    setError("");
+
+    try {
+      const email = cleanLogin.includes("@")
+        ? cleanLogin
+        : loginToEmail(cleanLogin);
+
+      const { data, error: authError } =
+        await supabase.auth.signInWithPassword({
+          email,
+          password: pass,
+        });
+
+      if (authError) {
+        throw authError;
+      }
+
+      if (!data?.session || !data?.user) {
+        throw new Error("Supabase не створив сесію входу");
+      }
+
+      setError("");
+    } catch (loginError) {
+      console.error("Помилка входу:", loginError);
+
+      const message = String(
+        loginError?.message || "Не вдалося виконати вхід"
+      );
+
+      if (
+        message.toLowerCase().includes("invalid login credentials")
+      ) {
+        setError("Невірний логін або пароль");
+      } else if (
+        message.toLowerCase().includes("failed to fetch") ||
+        message.toLowerCase().includes("network")
+      ) {
+        setError("Немає зв’язку із сервером. Перевір інтернет і повтори.");
+      } else {
+        setError(message);
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const createFirstAdmin = async () => {
