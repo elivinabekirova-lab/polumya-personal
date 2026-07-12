@@ -540,14 +540,9 @@ function Shell({ children }) {
 }
 function Centered({ children }) { return <div style={{ textAlign: "center", marginTop: 90, color: "#fff" }}>{children}</div>; }
 function Brand({ small = false }) {
-  return <div className="brand-lockup" style={{ display: "flex", alignItems: "center", gap: small ? 9 : 12 }}>
-    <div className="brand-mark" style={{ width: small ? 38 : 48, height: small ? 38 : 48 }}>
-      <img src="/polumya-logo.jpeg" alt="Полум’я" />
-    </div>
-    <div style={{ display: "grid", gap: 1 }}>
-      <span className="brand-name" style={{ fontSize: small ? 18 : 24 }}>ПОЛУМ’Я</span>
-      <span className="brand-caption">PERSONAL · MANAGEMENT</span>
-    </div>
+  return <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+    <span style={{ fontSize: small ? 22 : 29 }}>🔥</span>
+    <span style={{ fontFamily: "Alegreya,serif", fontSize: small ? 20 : 27, fontWeight: 700, color: "#fff" }}>Полум'я та Підгір'я</span>
   </div>;
 }
 
@@ -572,7 +567,7 @@ function AuthLogin() {
       email: login.trim().includes("@") ? login.trim().toLowerCase() : loginToEmail(login),
       password: pass,
     });
-    if (authError) setError(authError.message || "Невірний логін або пароль");
+    if (authError) setError("Невірний логін або пароль");
     setBusy(false);
   };
 
@@ -934,19 +929,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
 
   const recentCashRows = useMemo(() => Object.keys(cash).sort().reverse().flatMap((day) => POINTS.map((point) => ({ day, point, rec: getPointCash(cash, day, point) })).filter(({ rec }) => rec.kitchen || rec.bar || rec.total || Object.keys(rec.waiterCash || {}).length)).slice(0, 30), [cash]);
 
-  const smartRecommendations = useMemo(() => {
-    const items = [];
-    if (missingToday.length) items.push({ level: "high", title: "Контроль зміни", text: `${missingToday.length} працівник(ів) ще не відмітилися. Рекомендуємо перевірити графік.` });
-    if (anomalies.length) items.push({ level: "warning", title: "Перевірка даних", text: `Знайдено ${anomalies.length} потенційних невідповідностей у касі або змінах.` });
-    if (monthPlan && planProgress < 80) items.push({ level: "warning", title: "Місячний план", text: `Виконано ${fmt(planProgress)}%. Для досягнення плану варто посилити продажі та допродажі.` });
-    if (accrual.undistributed > 0) items.push({ level: "info", title: "Нерозподілений фонд", text: `${money(accrual.undistributed)} не розподілено через відсутні зміни або працівників.` });
-    const bestPoint = pointComparison.slice().sort((a,b)=>b.cash-a.cash)[0];
-    if (bestPoint?.cash > 0) items.push({ level: "success", title: "Лідер за касою", text: `${bestPoint.point} показує найвищу касу — ${money(bestPoint.cash)}.` });
-    if (!items.length) items.push({ level: "success", title: "Система в нормі", text: "Критичних відхилень не виявлено. Дані внесені коректно." });
-    return items.slice(0, 5);
-  }, [missingToday.length, anomalies.length, monthPlan, planProgress, accrual.undistributed, pointComparison]);
-
-  return <main style={{ maxWidth: 1240, margin: "0 auto" }}>
+  return <main style={{ maxWidth: 1180, margin: "0 auto" }}>
     <Header onLogout={onLogout} subtitle={`Адміністратор · ${me.name || ""}`} />
     <div style={S.stats}>
       <Stat title="Фонд ставок" value={money(totalPay)} />
@@ -959,10 +942,6 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
 
     {tab === "control" && <>
       <div style={S.stats}><Stat title="Не відмітилися сьогодні" value={missingToday.length} ember={missingToday.length>0}/><Stat title="Проблеми в даних" value={anomalies.length}/><Stat title="Прогноз виплат" value={money(forecastPayroll)}/></div>
-      <div style={{ ...S.card, marginBottom: 12 }}>
-        <div style={S.sectionHead}><div><div style={S.eyebrow}>SMART ANALYTICS</div><h2 style={S.h2}>Рекомендації системи</h2></div><span style={S.statusPill}>Оновлено автоматично</span></div>
-        <div style={S.recommendationGrid}>{smartRecommendations.map((item, index) => <div key={`${item.title}-${index}`} style={{ ...S.recommendation, ...(item.level === "high" ? S.recommendationHigh : item.level === "warning" ? S.recommendationWarning : item.level === "success" ? S.recommendationSuccess : {}) }}><b>{item.title}</b><p>{item.text}</p></div>)}</div>
-      </div>
       <div style={{...S.card,marginBottom:12}}><div style={S.sectionHead}><h2 style={S.h2}>План / факт · {MONTHS[month.getMonth()]}</h2><MonthNav month={month} setMonth={setMonth}/></div><div style={S.progress}><div style={{...S.progressBar,width:`${planProgress}%`}}/></div><p style={S.hint}>{money(monthTotalCash)} із {monthPlan?money(monthPlan):"план не задано"} · {fmt(planProgress)}%</p><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input style={S.input} type="number" placeholder="Місячний план" value={planDraft} onChange={e=>setPlanDraft(e.target.value)}/><button style={S.primary} onClick={saveMonthPlan}>Зберегти план</button><button style={S.ghost} onClick={toggleMonthClose}>{monthClosed?"Відкрити місяць":"Закрити місяць"}</button></div></div>
       <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Порівняння об’єктів</h2>{pointComparison.map(x=><div key={x.point} style={S.metricRow}><b>{x.point}</b><span>Каса {money(x.cash)}</span><span>% {money(x.percent)}</span><span>Працівників {x.workers}</span></div>)}</div>
       <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Хто не відмітився сьогодні</h2>{missingToday.length?missingToday.map(p=><div style={S.lineRow} key={p.id}><span>{p.name}<small style={S.smallText}>{p.point} · {p.profession}</small></span><button style={S.ghost} onClick={()=>writeShift(todayKey,p.id,"off")}>Поставити вихідний</button></div>):<p style={S.success}>✓ Усі відмітилися</p>}</div>
@@ -1153,70 +1132,66 @@ function Stat({ title, value, ember }) { return <div style={{ ...S.stat, ...(emb
 function Mini({ title, value }) { return <div style={S.mini}><b style={{ fontSize: 20 }}>{value}</b><small style={{ color: "#eee7dc" }}>{title}</small></div>; }
 
 const S = {
-  page: { minHeight: "100vh", background: "#0d0d0c", color: "#f7f4ed", fontFamily: "Inter,system-ui,sans-serif", padding: "18px 12px 48px" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 18, padding: "4px 2px 12px", borderBottom: "1px solid #2b2924" },
-  headerSub: { color: "#9e978a", fontSize: 12, marginLeft: 60, marginTop: 2 },
-  card: { background: "linear-gradient(180deg,#171714 0%,#131311 100%)", border: "1px solid #302e28", borderRadius: 12, padding: 14, boxShadow: "0 10px 30px rgba(0,0,0,.18)" },
-  h2: { margin: 0, fontFamily: "Inter,system-ui,sans-serif", fontSize: 18, letterSpacing: "-.02em", color: "#f8f5ee", fontWeight: 750 },
-  h3: { margin: "0 0 10px", color: "#f8f5ee", fontFamily: "Inter,system-ui,sans-serif", fontSize: 16 },
-  eyebrow: { color: "#b89a58", fontSize: 10, fontWeight: 800, letterSpacing: ".16em", marginBottom: 4 },
-  label: { color: "#b8b0a2", fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".09em", margin: "12px 0 7px" },
-  input: { background: "#0e0e0d", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 8, padding: "9px 11px", fontSize: 13.5, outline: "none" },
-  inputFull: { width: "100%", background: "#0e0e0d", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 8, padding: "10px 11px", fontSize: 13.5, marginTop: 5 },
-  primary: { background: "linear-gradient(135deg,#d3b066,#9f7a35)", color: "#0b0b0a", border: "1px solid #d6ba79", borderRadius: 8, padding: "9px 14px", fontWeight: 800 },
-  ghost: { background: "#171714", color: "#e9e4da", border: "1px solid #3a372f", borderRadius: 8, padding: "7px 11px" },
-  loginBtn: { background: "#171714", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 9, padding: "9px 16px", fontSize: 14 },
-  subtleCenter: { textAlign: "center", color: "#9e978a", margin: "8px 0 20px", fontSize: 13 },
-  bigBtn: { background: "#171714", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 9, padding: 13, fontWeight: 750 },
-  bigOn: { background: "linear-gradient(135deg,#d3b066,#9f7a35)", borderColor: "#d6ba79", color: "#0b0b0a" },
-  hint: { color: "#9e978a", fontSize: 12, lineHeight: 1.45 },
-  success: { color: "#9fc79a", fontSize: 12.5, fontWeight: 700 },
-  error: { color: "#efaaa0", fontSize: 12.5 },
-  emberAmount: { color: "#d9b86f", fontSize: 27, fontWeight: 800 },
-  grid3: { display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 12 },
-  mini: { background: "#11110f", border: "1px solid #2b2924", borderRadius: 9, padding: 9, textAlign: "center", display: "grid", gap: 4 },
-  pre: { whiteSpace: "pre-wrap", fontFamily: "Inter,sans-serif", lineHeight: 1.55, color: "#eee9df" },
-  footer: { textAlign: "center", color: "#777166", fontSize: 11, marginTop: 20 },
-  linkBtn: { background: "none", border: 0, color: "#d5b66d", textDecoration: "none", padding: 0 },
-  stats: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(155px,1fr))", gap: 8, marginBottom: 12 },
-  stat: { background: "#151512", border: "1px solid #302e28", borderRadius: 10, padding: "11px 13px" },
-  tabs: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 7, marginBottom: 12, WebkitOverflowScrolling: "touch" },
-  tab: { flex: "0 0 auto", background: "#11110f", border: "1px solid #302e28", color: "#b8b0a2", borderRadius: 8, padding: "7px 12px", fontSize: 12.5 },
-  tabOn: { background: "#d0ad63", borderColor: "#d0ad63", color: "#0c0c0b", fontWeight: 800 },
-  pointTabs: { display: "flex", gap: 6, flexWrap: "wrap", margin: "12px 0" },
+  page: { minHeight: "100vh", background: "#171512", color: "#fff", fontFamily: "Inter,sans-serif", padding: "20px 14px 44px" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 16 },
+  headerSub: { color: "#eee7dc", fontSize: 13, marginLeft: 40, marginTop: 2 },
+  card: { background: "#22201c", border: "1px solid #39352e", borderRadius: 14, padding: 16 },
+  h2: { margin: 0, fontFamily: "Alegreya,serif", fontSize: 21, color: "#fff" },
+  h3: { margin: "0 0 12px", color: "#fff", fontFamily: "Alegreya,serif", fontSize: 18 },
+  label: { color: "#dcead4", fontSize: 12, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".07em", margin: "12px 0 8px" },
+  input: { background: "#171512", border: "1px solid #4a443b", color: "#fff", borderRadius: 8, padding: "9px 12px", fontSize: 14 },
+  inputFull: { width: "100%", background: "#171512", border: "1px solid #4a443b", color: "#fff", borderRadius: 8, padding: "10px 12px", fontSize: 14, marginTop: 5 },
+  primary: { background: "#e8763a", color: "#fff", border: 0, borderRadius: 8, padding: "9px 15px", fontWeight: 700 },
+  ghost: { background: "transparent", color: "#fff", border: "1px solid #4a443b", borderRadius: 8, padding: "7px 12px" },
+  loginBtn: { background: "#2a2722", border: "1px solid #474139", color: "#fff", borderRadius: 10, padding: "10px 18px", fontSize: 15 },
+  subtleCenter: { textAlign: "center", color: "#eee7dc", marginBottom: 24 },
+  bigBtn: { background: "#2a2722", border: "1px solid #474139", color: "#fff", borderRadius: 12, padding: 15, fontWeight: 700 },
+  bigOn: { background: "#e8763a", borderColor: "#e8763a", color: "#fff" },
+  hint: { color: "#eee7dc", fontSize: 12.5, lineHeight: 1.5 },
+  success: { color: "#dcead4", fontSize: 13, fontWeight: 700 },
+  error: { color: "#ffd4cb", fontSize: 13 },
+  emberAmount: { color: "#ff9a64", fontFamily: "Alegreya,serif", fontSize: 29, fontWeight: 700 },
+  grid3: { display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 14 },
+  mini: { background: "#2a2722", borderRadius: 10, padding: 10, textAlign: "center", display: "grid", gap: 5 },
+  pre: { whiteSpace: "pre-wrap", fontFamily: "Inter,sans-serif", lineHeight: 1.6, color: "#fff" },
+  footer: { textAlign: "center", color: "#eee7dc", fontSize: 12, marginTop: 22 },
+  linkBtn: { background: "none", border: 0, color: "#fff", textDecoration: "underline", padding: 0 },
+  stats: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10, marginBottom: 15 },
+  stat: { background: "#22201c", border: "1px solid #39352e", borderRadius: 12, padding: "12px 16px" },
+  tabs: { display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 },
+  tab: { background: "transparent", border: "1px solid #3b3730", color: "#fff", borderRadius: 20, padding: "7px 15px" },
+  tabOn: { background: "#e8763a", borderColor: "#e8763a", color: "#fff", fontWeight: 700 },
+  pointTabs: { display: "flex", gap: 7, flexWrap: "wrap", margin: "14px 0" },
   sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 },
-  row: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#11110f", borderBottom: "1px solid #302e28", padding: "10px 8px", marginBottom: 0 },
-  chip: { background: "#11110f", border: "1px solid #3a372f", color: "#d8d1c5", borderRadius: 7, padding: "5px 9px", fontSize: 12 },
-  chipOn: { background: "#cdaa60", borderColor: "#cdaa60", color: "#0c0c0b", fontWeight: 800 },
-  formGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 9 },
-  field: { color: "#c7c0b4", fontSize: 12, fontWeight: 650 },
-  cashInputRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "9px 3px", borderBottom: "1px solid #302e28" },
-  smallText: { display: "block", color: "#8e887e", fontSize: 11, marginTop: 2 },
-  calendarGrid: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5 },
-  calendarDay: { minHeight: 34, borderRadius: 7, display: "grid", placeItems: "center", background: "#11110f", border: "1px solid #302e28", color: "#ded8ce", fontSize: 11.5 },
-  calendarFull: { background: "#cdaa60", borderColor: "#cdaa60", color: "#0c0c0b" },
-  calendarHalf: { background: "linear-gradient(135deg,#cdaa60 50%,#11110f 50%)" },
-  calendarTraining: { background: "#725f3d" }, calendarOff: { background: "#4a4945" },
-  notice: { background: "#11110f", borderLeft: "3px solid #cdaa60", borderTop: "1px solid #302e28", borderRight: "1px solid #302e28", borderBottom: "1px solid #302e28", borderRadius: 8, padding: 11, marginTop: 7, color: "#eee9df" },
-  badge: { display: "inline-block", background: "#11110f", border: "1px solid #8f743c", color: "#d6bd82", padding: "6px 9px", borderRadius: 7, margin: "3px 5px 3px 0", fontSize: 11.5 },
-  requestRow: { display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderBottom: "1px solid #302e28", color: "#ddd7cd", fontSize: 12 },
-  requestAdmin: { display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#11110f", border: "1px solid #302e28", borderRadius: 8, padding: 11, marginTop: 7 },
-  progress: { height: 8, background: "#0b0b0a", border: "1px solid #302e28", borderRadius: 20, overflow: "hidden", marginTop: 12 },
-  progressBar: { height: "100%", background: "linear-gradient(90deg,#8f6f32,#d5b96f)", borderRadius: 20 },
-  metricRow: { display: "grid", gridTemplateColumns: "1.2fr repeat(3,1fr)", gap: 8, padding: "10px 4px", borderBottom: "1px solid #302e28", color: "#e7e1d7", fontSize: 12.5 },
-  alertRow: { background: "#241b17", border: "1px solid #5b3c2d", color: "#efb6aa", borderRadius: 7, padding: 9, marginTop: 6 },
-  auditRow: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", padding: "9px 3px", borderBottom: "1px solid #302e28", color: "#ddd7cd" },
-  lineRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 3px", borderBottom: "1px solid #302e28", color: "#e7e1d7" },
-  detailBox: { background: "#11110f", color: "#ddd7cd", border: "1px solid #302e28", borderRadius: 7, padding: 9, marginTop: 6, fontSize: 12, lineHeight: 1.45 },
-  savedRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "10px 3px", borderBottom: "1px solid #302e28" },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 12.5, color: "#e7e1d7" },
-  stickyName: { position: "sticky", left: 0, background: "#151512", whiteSpace: "nowrap", padding: "8px 9px", zIndex: 1, border: "1px solid #302e28" },
-  cell: { width: 20, height: 20, borderRadius: 4, border: "1px solid #464238" },
-  nav: { background: "#11110f", border: "1px solid #3a372f", color: "#d8d1c5", borderRadius: 7, width: 32, height: 32 },
-  formBox: { display: "grid", gap: 8, background: "#11110f", border: "1px solid #302e28", borderRadius: 8, padding: 12, marginBottom: 12 },
-  textarea: { width: "100%", background: "#0e0e0d", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 8, padding: 11, fontSize: 13.5, lineHeight: 1.55 },
-  statusPill: { background: "#171714", border: "1px solid #3a372f", color: "#a9a195", borderRadius: 999, padding: "5px 8px", fontSize: 10.5 },
-  recommendationGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 },
-  recommendation: { background: "#11110f", border: "1px solid #302e28", borderRadius: 8, padding: 11, color: "#ddd7cd" },
-  recommendationHigh: { borderLeft: "3px solid #c96f5c" }, recommendationWarning: { borderLeft: "3px solid #c5a45c" }, recommendationSuccess: { borderLeft: "3px solid #7fa279" },
+  row: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#2a2722", border: "1px solid #3b3730", borderRadius: 10, padding: "9px 12px", marginBottom: 6 },
+  chip: { background: "transparent", border: "1px solid #4a443b", color: "#fff", borderRadius: 16, padding: "5px 10px" },
+  chipOn: { background: "#e8763a", borderColor: "#e8763a", color: "#fff", fontWeight: 700 },
+  formGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 10 },
+  field: { color: "#fff", fontSize: 12.5, fontWeight: 600 },
+  cashInputRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 4px", borderBottom: "1px solid #3b3730" },
+  smallText: { display: "block", color: "#eee7dc", fontSize: 11.5, marginTop: 3 },
+  calendarGrid: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 6 },
+  calendarDay: { minHeight: 36, borderRadius: 8, display: "grid", placeItems: "center", background: "#2a2722", border: "1px solid #3b3730", color: "#fff", fontSize: 12 },
+  calendarFull: { background: "#e8763a", borderColor: "#e8763a" },
+  calendarHalf: { background: "linear-gradient(135deg,#e8763a 50%,#2a2722 50%)" },
+  calendarTraining: { background: "#766243" },
+  calendarOff: { background: "#64605a" },
+  notice: { background: "#2a2722", border: "1px solid #4a443b", borderRadius: 10, padding: 12, marginTop: 8, color: "#fff" },
+  badge: { display: "inline-block", background: "#2a2722", border: "1px solid #e8763a", color: "#fff", padding: "7px 10px", borderRadius: 18, margin: "4px 6px 4px 0", fontSize: 12 },
+  requestRow: { display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderBottom: "1px solid #3b3730", color: "#fff", fontSize: 12 },
+  requestAdmin: { display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#2a2722", border: "1px solid #3b3730", borderRadius: 10, padding: 12, marginTop: 8 },
+  progress: { height: 14, background: "#171512", border: "1px solid #3b3730", borderRadius: 20, overflow: "hidden", marginTop: 14 },
+  progressBar: { height: "100%", background: "#e8763a", borderRadius: 20 },
+  metricRow: { display: "grid", gridTemplateColumns: "1.2fr repeat(3,1fr)", gap: 8, padding: "11px 0", borderBottom: "1px solid #3b3730", color: "#fff" },
+  alertRow: { background: "#33251f", border: "1px solid #6f4531", color: "#ffd4cb", borderRadius: 8, padding: 10, marginTop: 7 },
+  auditRow: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", padding: "10px 0", borderBottom: "1px solid #3b3730", color: "#fff" },
+  lineRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 4px", borderBottom: "1px solid #3b3730", color: "#fff" },
+  detailBox: { background: "#2a2722", color: "#fff", borderRadius: 8, padding: 10, marginTop: 7, fontSize: 12.5, lineHeight: 1.5 },
+  savedRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "10px 4px", borderBottom: "1px solid #3b3730" },
+  table: { borderCollapse: "collapse", fontSize: 13, color: "#fff" },
+  stickyName: { position: "sticky", left: 0, background: "#22201c", whiteSpace: "nowrap", padding: "7px 9px", zIndex: 1 },
+  cell: { width: 20, height: 20, borderRadius: 5, border: "1px solid #4a443b" },
+  nav: { background: "#2a2722", border: "1px solid #4a443b", color: "#fff", borderRadius: 8, width: 32, height: 32 },
+  formBox: { display: "grid", gap: 8, background: "#2a2722", borderRadius: 10, padding: 14, marginBottom: 14 },
+  textarea: { width: "100%", background: "#171512", border: "1px solid #4a443b", color: "#fff", borderRadius: 8, padding: 12, fontSize: 14, lineHeight: 1.6 },
 };
