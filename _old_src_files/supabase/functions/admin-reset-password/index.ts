@@ -11,12 +11,17 @@ const normalizeLogin = (value: string) => value.trim().toLowerCase().replace(/[^
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers });
   try {
-    const service = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!);
+    const service = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!, {
+      auth: { autoRefreshToken: false, persistSession: false },
+    });
     const token = (req.headers.get("Authorization") || "").replace("Bearer ", "");
     const { data: current, error: currentError } = await service.auth.getUser(token);
     if (currentError || !current.user) throw new Error("Потрібна авторизація адміністратора");
+
     const { data: caller } = await service.from("profiles").select("role, active").eq("user_id", current.user.id).maybeSingle();
-    if (caller?.role !== "admin" || !caller.active) throw new Error("Недостатньо прав");
+    const metadata = current.user.user_metadata || {};
+    const isAdmin = (caller?.role === "admin" && caller?.active !== false) || (metadata.role === "admin" && metadata.active !== false);
+    if (!isAdmin) throw new Error("Недостатньо прав адміністратора");
 
     const body = await req.json();
     const password = String(body.password || "");
@@ -27,6 +32,11 @@ Deno.serve(async (req) => {
       const login = normalizeLogin(String(body.login));
       const { data: profile } = await service.from("profiles").select("user_id").eq("login", login).maybeSingle();
       userId = profile?.user_id || "";
+      if (!userId) {
+        const email = `${login}@${AUTH_EMAIL_DOMAIN}`;
+        const { data: usersPage } = await service.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        userId = (usersPage?.users || []).find((user) => String(user.email || "").toLowerCase() === email)?.id || "";
+      }
     }
     if (!userId) throw new Error("Акаунт працівника не знайдено");
 
