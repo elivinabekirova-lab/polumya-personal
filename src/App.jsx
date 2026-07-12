@@ -676,16 +676,16 @@ function ShiftReminderControl({ person }) {
       } else {
         await enableShiftReminder(person);
         setEnabled(true);
-        setMessage("Нагадування о 12:00 увімкнено");
+        setMessage("Сповіщення та нагадування увімкнено на цьому телефоні");
       }
     } catch (error) {
       setMessage(error?.message || "Не вдалося змінити нагадування");
     } finally { setBusy(false); }
   };
   return <div style={{ ...S.card, marginTop: 12 }}>
-    <h3 style={S.h3}>🔔 Нагадування</h3>
+    <h3 style={S.h3}>🔔 Сповіщення</h3>
     {!isPushSupported() && <p style={S.error}>На iPhone відкрий застосунок через іконку на головному екрані.</p>}
-    <button style={enabled ? S.ghost : S.primary} disabled={busy} onClick={toggle}>{busy ? "Зачекай…" : enabled ? "Вимкнути нагадування" : "Увімкнути нагадування о 12:00"}</button>
+    <button style={enabled ? S.ghost : S.primary} disabled={busy} onClick={toggle}>{busy ? "Зачекай…" : enabled ? "Вимкнути нагадування" : "Увімкнути сповіщення на телефоні"}</button>
     {message && <p style={S.hint}>{message}</p>}
   </div>;
 }
@@ -866,7 +866,25 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
   const forecastPayroll = today.getDate() > 0 ? estimatedPayroll / Math.max(1,today.getDate()) * monthDays : estimatedPayroll;
   const pointComparison = POINTS.map((point)=>({ point, cash: monthCashSummary[point].total, percent: accrual.byPoint[point]?.total||0, workers: normalizedStaff.filter(p=>p.point===point).length }));
   const monthClosed = (closedMonths || []).includes(monthPrefix);
-  const createAnnouncement = async () => { if(!announcementForm.title.trim() || !announcementForm.text.trim()) return; const next=[...(announcements||[]),{id:uid(),...announcementForm,createdAt:new Date().toISOString(),author:me.name}]; await saveAnnouncements(next); await addAudit("Створено оголошення", announcementForm.title); setAnnouncementForm({title:"",text:"",expiresAt:""}); };
+  const createAnnouncement = async () => {
+    if (!announcementForm.title.trim() || !announcementForm.text.trim()) return;
+    const item = { id: uid(), ...announcementForm, createdAt: new Date().toISOString(), author: me.name };
+    const next = [...(announcements || []), item];
+    await saveAnnouncements(next);
+
+    const { data: pushResult, error: pushError } = await supabase.functions.invoke("send-announcement", {
+      body: { title: item.title, text: item.text, announcementId: item.id },
+    });
+
+    if (pushError || !pushResult?.ok) {
+      alert(`Оголошення збережено, але push не надіслано: ${pushResult?.error || pushError?.message || "невідома помилка"}`);
+    } else {
+      alert(`Оголошення опубліковано. Сповіщень надіслано: ${pushResult.sent} із ${pushResult.registered}.`);
+    }
+
+    await addAudit("Створено оголошення", `${announcementForm.title} · push: ${pushResult?.sent || 0}`);
+    setAnnouncementForm({ title: "", text: "", expiresAt: "" });
+  };
   const decideRequest = async (id,status) => { const next=(requests||[]).map(r=>r.id===id?{...r,status,decidedAt:new Date().toISOString(),decidedBy:me.name}:r); await saveRequests(next); await addAudit(status==="approved"?"Схвалено запит":"Відхилено запит", id); };
   const saveMonthPlan = async () => { const next={...(plans||{}),[planKey]:Number(planDraft)||0}; await savePlans(next); await addAudit("Оновлено місячний план", `${planKey}: ${money(next[planKey])}`); };
   const toggleMonthClose = async () => { const next=monthClosed?(closedMonths||[]).filter(x=>x!==monthPrefix):[...(closedMonths||[]),monthPrefix]; await saveClosedMonths(next); await addAudit(monthClosed?"Відкрито місяць":"Закрито місяць",monthPrefix); };
@@ -1098,7 +1116,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
 
     {tab === "requests" && <div style={S.card}><h2 style={S.h2}>Запити працівників</h2>{(requests||[]).length?(requests||[]).slice().reverse().map(r=><div key={r.id} style={S.requestAdmin}><div><b>{r.employeeName} · {r.type}</b><small style={S.smallText}>{r.point} · {new Date(r.createdAt).toLocaleString("uk-UA")}</small><p style={{margin:"7px 0"}}>{r.text}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{r.status==="new"?<><button style={S.primary} onClick={()=>decideRequest(r.id,"approved")}>Схвалити</button><button style={S.ghost} onClick={()=>decideRequest(r.id,"rejected")}>Відхилити</button></>:<b>{r.status==="approved"?"Схвалено":"Відхилено"}</b>}</div></div>):<p style={S.hint}>Нових запитів немає.</p>}</div>}
 
-    {tab === "announcements" && <div style={S.card}><h2 style={S.h2}>Оголошення для персоналу</h2><div style={S.formGrid}><Field label="Заголовок"><input style={S.inputFull} value={announcementForm.title} onChange={e=>setAnnouncementForm({...announcementForm,title:e.target.value})}/></Field><Field label="Показувати до"><input style={S.inputFull} type="date" value={announcementForm.expiresAt} onChange={e=>setAnnouncementForm({...announcementForm,expiresAt:e.target.value})}/></Field></div><textarea style={{...S.textarea,marginTop:10}} rows={4} placeholder="Текст оголошення" value={announcementForm.text} onChange={e=>setAnnouncementForm({...announcementForm,text:e.target.value})}/><button style={{...S.primary,marginTop:8}} onClick={createAnnouncement}>Опублікувати</button><div style={{marginTop:14}}>{(announcements||[]).slice().reverse().map(a=><div style={S.notice} key={a.id}><div style={S.sectionHead}><b>{a.title}</b><button style={S.ghost} onClick={()=>saveAnnouncements((announcements||[]).filter(x=>x.id!==a.id))}>Видалити</button></div><p>{a.text}</p><small>{a.author} · {new Date(a.createdAt).toLocaleString("uk-UA")}</small></div>)}</div></div>}
+    {tab === "announcements" && <div style={S.card}><h2 style={S.h2}>Оголошення для персоналу</h2><ShiftReminderControl person={{ id: me.userId || "admin", userId: me.userId, name: me.name || "Адміністратор", point: "Адмін" }} /><div style={S.formGrid}><Field label="Заголовок"><input style={S.inputFull} value={announcementForm.title} onChange={e=>setAnnouncementForm({...announcementForm,title:e.target.value})}/></Field><Field label="Показувати до"><input style={S.inputFull} type="date" value={announcementForm.expiresAt} onChange={e=>setAnnouncementForm({...announcementForm,expiresAt:e.target.value})}/></Field></div><textarea style={{...S.textarea,marginTop:10}} rows={4} placeholder="Текст оголошення" value={announcementForm.text} onChange={e=>setAnnouncementForm({...announcementForm,text:e.target.value})}/><button style={{...S.primary,marginTop:8}} onClick={createAnnouncement}>Опублікувати</button><div style={{marginTop:14}}>{(announcements||[]).slice().reverse().map(a=><div style={S.notice} key={a.id}><div style={S.sectionHead}><b>{a.title}</b><button style={S.ghost} onClick={()=>saveAnnouncements((announcements||[]).filter(x=>x.id!==a.id))}>Видалити</button></div><p>{a.text}</p><small>{a.author} · {new Date(a.createdAt).toLocaleString("uk-UA")}</small></div>)}</div></div>}
 
     {tab === "staff" && <div style={S.card}>
       <div style={S.sectionHead}><h2 style={S.h2}>Персонал</h2><button style={S.primary} onClick={() => setStaffForm({ name: "", point: "Полум'я", profession: "Офіціант", rate: "", login: "", password: "", active: true })}>+ Додати</button></div>
