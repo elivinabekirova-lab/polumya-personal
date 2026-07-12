@@ -26,6 +26,19 @@ const loginToEmail = (login) => {
   return `${value.replace(/[^a-z0-9._-]/g, "")}@${AUTH_EMAIL_DOMAIN}`;
 };
 
+const UA_LATIN = {
+  а:"a",б:"b",в:"v",г:"h",ґ:"g",д:"d",е:"e",є:"ye",ж:"zh",з:"z",и:"y",і:"i",ї:"yi",й:"i",
+  к:"k",л:"l",м:"m",н:"n",о:"o",п:"p",р:"r",с:"s",т:"t",у:"u",ф:"f",х:"kh",ц:"ts",ч:"ch",ш:"sh",щ:"shch",
+  ь:"",ю:"yu",я:"ya",ы:"y",э:"e",ъ:""
+};
+const latinLogin = (value) => String(value || "").trim().toLowerCase().split("").map((ch) => UA_LATIN[ch] ?? ch).join("").replace(/[^a-z0-9._-]+/g, ".").replace(/^\.+|\.+$/g, "") || "staff";
+const generatedPassword = () => {
+  const alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789";
+  const bytes = new Uint32Array(10);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (n) => alphabet[n % alphabet.length]).join("") + "!";
+};
+
 const POINTS = ["Полум'я", "Підгір'я", "SPA"];
 const PROFESSIONS = {
   "Полум'я": ["Офіціант", "Бармен", "Кухня", "Прибиральниця", "Студент"],
@@ -345,49 +358,15 @@ export default function App() {
         .eq("user_id", user.id)
         .maybeSingle();
 
-      const metadata = user.user_metadata || {};
-      const resolvedProfile =
-        profile?.active
-          ? profile
-          : {
-              user_id: user.id,
-              role: metadata.role || "employee",
-              staff_id: metadata.staff_id || null,
-              display_name:
-                metadata.display_name ||
-                metadata.name ||
-                user.email ||
-                "Працівник",
-              active: metadata.active !== false,
-            };
-
-      if (!resolvedProfile.active) {
+      if (error || !profile?.active) {
         await supabase.auth.signOut();
-        if (active) {
-          setMe(null);
-          setAuthReady(true);
-          setLoading(false);
-        }
+        if (active) { setMe(null); setAuthReady(true); setLoading(false); }
         return;
       }
 
-      const sessionProfile =
-        resolvedProfile.role === "admin"
-          ? {
-              type: "admin",
-              userId: user.id,
-              name:
-                resolvedProfile.display_name ||
-                "Адміністратор",
-            }
-          : {
-              type: "emp",
-              userId: user.id,
-              id: resolvedProfile.staff_id,
-              name:
-                resolvedProfile.display_name ||
-                "Працівник",
-            };
+      const sessionProfile = profile.role === "admin"
+        ? { type: "admin", userId: user.id, name: profile.display_name || "Адміністратор" }
+        : { type: "emp", userId: user.id, id: profile.staff_id, name: profile.display_name || "Працівник" };
 
       if (active) setMe(sessionProfile);
 
@@ -590,28 +569,18 @@ function AuthLogin() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let active = true;
-    supabase.functions.invoke("bootstrap-admin", { body: { action: "status" } })
-      .then(({ data, error: fnError }) => {
-        if (!active) return;
-        if (fnError) {
-          setError("Не вдалося перевірити налаштування авторизації");
-          setMode("login");
-          return;
-        }
-        setMode(data?.needsSetup ? "setup" : "login");
-      });
-    return () => { active = false; };
+    setError("");
+    setMode("login");
   }, []);
 
   const enter = async () => {
     if (!login.trim() || !pass) { setError("Введи логін і пароль"); return; }
     setBusy(true); setError("");
     const { error: authError } = await supabase.auth.signInWithPassword({
-      email: loginToEmail(login),
+      email: login.trim().includes("@") ? login.trim().toLowerCase() : loginToEmail(login),
       password: pass,
     });
-    if (authError) setError("Невірний логін або пароль");
+    if (authError) setError(authError.message || "Невірний логін або пароль");
     setBusy(false);
   };
 
@@ -815,6 +784,8 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
   const [planDraft, setPlanDraft] = useState("");
   const [massPoint, setMassPoint] = useState("Полум'я");
   const [massStatus, setMassStatus] = useState("off");
+  const [bulkAccessBusy, setBulkAccessBusy] = useState(false);
+  const [createdCredentials, setCreatedCredentials] = useState([]);
 
   useEffect(() => setPercentDraft(normalizePercentRules(settings.percentRules)), [settings.percentRules]);
   useEffect(() => {
@@ -919,6 +890,69 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
     if (error || !data?.ok) { alert(data?.error || error?.message || "Не вдалося змінити пароль"); return; }
     await addAudit("Змінено пароль працівника", person.name);
     alert(`Пароль для ${person.name} змінено. Передай його працівнику особисто.`);
+  };
+
+  const uniqueLoginFor = (person, used) => {
+    if (person.login?.trim()) return latinLogin(person.login);
+    const suffix = person.profession === "Офіціант" ? "waiter" : person.profession === "Бармен" ? "bar" : person.profession === "Кухня" ? "kitchen" : person.profession === "Прибиральниця" ? "clean" : "staff";
+    const pointSuffix = person.point === "Полум'я" ? "" : person.point === "Підгір'я" ? ".pidgirya" : ".spa";
+    const base = `${latinLogin(person.name)}.${suffix}${pointSuffix}`;
+    let candidate = base;
+    let i = 2;
+    while (used.has(candidate)) candidate = `${base}${i++}`;
+    used.add(candidate);
+    return candidate;
+  };
+
+  const createAccessForAll = async () => {
+    const targets = normalizedStaff.filter((person) => person.active !== false && !person.authUserId);
+    if (!targets.length) { alert("У всіх активних працівників уже є доступ."); return; }
+    if (!confirm(`Створити особисті входи для ${targets.length} працівників?`)) return;
+
+    setBulkAccessBusy(true);
+    const used = new Set(normalizedStaff.map((person) => latinLogin(person.login || "")).filter(Boolean));
+    const updated = normalizedStaff.map((person) => ({ ...person }));
+    const credentials = [];
+    const failures = [];
+
+    for (const person of targets) {
+      const login = uniqueLoginFor(person, used);
+      const password = generatedPassword();
+      const access = await createStaffAccess(person.id, person.name, login, password, "employee");
+      if (access.ok) {
+        const row = updated.find((item) => item.id === person.id);
+        if (row) { row.login = login; row.authUserId = access.userId; }
+        credentials.push({ name: person.name, point: person.point, profession: person.profession, login, password });
+      } else {
+        failures.push(`${person.name}: ${access.error}`);
+      }
+    }
+
+    if (credentials.length) {
+      await saveStaff(updated);
+      await addAudit("Створено масові доступи", `${credentials.length} працівників`);
+      setCreatedCredentials(credentials);
+    }
+    setBulkAccessBusy(false);
+    if (failures.length) alert(`Не вдалося створити частину доступів:
+${failures.join("\n")}`);
+  };
+
+  const copyCredentials = async () => {
+    const text = createdCredentials.map((row) => `${row.name} (${row.profession}, ${row.point}) — логін: ${row.login}, пароль: ${row.password}`).join("\n");
+    await navigator.clipboard.writeText(text);
+    alert("Логіни й паролі скопійовано.");
+  };
+
+  const downloadCredentials = () => {
+    const rows = [["Ім’я","Об’єкт","Професія","Логін","Тимчасовий пароль"], ...createdCredentials.map((row) => [row.name,row.point,row.profession,row.login,row.password])];
+    const csv = rows.map((row) => row.map((cell) => `"${String(cell).replaceAll('"','""')}"`).join(";")).join("\n");
+    const blob = new Blob(["\ufeff" + csv], { type: "text/csv;charset=utf-8" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `staff-access-${dk(new Date())}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
   };
 
   const submitStaff = async () => {
@@ -1128,7 +1162,19 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
     {tab === "announcements" && <div style={S.card}><h2 style={S.h2}>Оголошення для персоналу</h2><div style={S.formGrid}><Field label="Заголовок"><input style={S.inputFull} value={announcementForm.title} onChange={e=>setAnnouncementForm({...announcementForm,title:e.target.value})}/></Field><Field label="Показувати до"><input style={S.inputFull} type="date" value={announcementForm.expiresAt} onChange={e=>setAnnouncementForm({...announcementForm,expiresAt:e.target.value})}/></Field></div><textarea style={{...S.textarea,marginTop:10}} rows={4} placeholder="Текст оголошення" value={announcementForm.text} onChange={e=>setAnnouncementForm({...announcementForm,text:e.target.value})}/><button style={{...S.primary,marginTop:8}} onClick={createAnnouncement}>Опублікувати</button><div style={{marginTop:14}}>{(announcements||[]).slice().reverse().map(a=><div style={S.notice} key={a.id}><div style={S.sectionHead}><b>{a.title}</b><button style={S.ghost} onClick={()=>saveAnnouncements((announcements||[]).filter(x=>x.id!==a.id))}>Видалити</button></div><p>{a.text}</p><small>{a.author} · {new Date(a.createdAt).toLocaleString("uk-UA")}</small></div>)}</div></div>}
 
     {tab === "staff" && <div style={S.card}>
-      <div style={S.sectionHead}><h2 style={S.h2}>Персонал</h2><button style={S.primary} onClick={() => setStaffForm({ name: "", point: "Полум'я", profession: "Офіціант", rate: "", login: "", password: "", active: true })}>+ Додати</button></div>
+      <div style={S.sectionHead}>
+        <h2 style={S.h2}>Персонал</h2>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button style={S.primary} onClick={() => setStaffForm({ name: "", point: "Полум'я", profession: "Офіціант", rate: "", login: "", password: "", active: true })}>+ Додати нового</button>
+          <button style={S.ghost} disabled={bulkAccessBusy} onClick={createAccessForAll}>{bulkAccessBusy ? "Створюю доступи…" : "🔐 Створити входи всім"}</button>
+        </div>
+      </div>
+      <p style={S.hint}>Кнопка «Створити входи всім» створює акаунти лише тим активним працівникам, у кого їх ще немає. Нових людей надалі додавай кнопкою «+ Додати нового».</p>
+      {createdCredentials.length > 0 && <div style={{ ...S.card, marginTop: 12, background: "#2a2722" }}>
+        <div style={S.sectionHead}><h3 style={S.h3}>Нові логіни та тимчасові паролі</h3><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><button style={S.ghost} onClick={copyCredentials}>Копіювати</button><button style={S.ghost} onClick={downloadCredentials}>Завантажити CSV</button></div></div>
+        <div style={{ overflowX: "auto" }}><table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}><thead><tr>{["Працівник","Об’єкт","Професія","Логін","Пароль"].map((h)=><th key={h} style={{textAlign:"left",padding:"8px",borderBottom:"1px solid #4a443b",color:"#eee7dc"}}>{h}</th>)}</tr></thead><tbody>{createdCredentials.map((row)=><tr key={`${row.login}-${row.name}`}><td style={{padding:8,borderBottom:"1px solid #39352e"}}>{row.name}</td><td style={{padding:8,borderBottom:"1px solid #39352e"}}>{row.point}</td><td style={{padding:8,borderBottom:"1px solid #39352e"}}>{row.profession}</td><td style={{padding:8,borderBottom:"1px solid #39352e"}}><b>{row.login}</b></td><td style={{padding:8,borderBottom:"1px solid #39352e"}}><b>{row.password}</b></td></tr>)}</tbody></table></div>
+        <p style={S.hint}>Збережи або скопіюй цей список зараз. Паролі після закриття сторінки не показуються повторно.</p>
+      </div>}
       {staffForm && <div style={S.formBox}>
         <input style={S.input} placeholder="Ім'я" value={staffForm.name} onChange={(e) => setStaffForm({ ...staffForm, name: e.target.value })} />
         <select style={S.input} value={staffForm.point} onChange={(e) => { const point = e.target.value; setStaffForm({ ...staffForm, point, profession: PROFESSIONS[point][0] }); }}>{POINTS.map((point) => <option key={point}>{point}</option>)}</select>
