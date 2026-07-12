@@ -567,7 +567,7 @@ function AuthLogin() {
       email: login.trim().includes("@") ? login.trim().toLowerCase() : loginToEmail(login),
       password: pass,
     });
-    if (authError) setError("Невірний логін або пароль");
+    if (authError) setError(authError.message || "Невірний логін або пароль");
     setBusy(false);
   };
 
