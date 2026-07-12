@@ -556,25 +556,15 @@ function AuthLogin() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    let active = true;
-    supabase.functions.invoke("bootstrap-admin", { body: { action: "status" } })
-      .then(({ data, error: fnError }) => {
-        if (!active) return;
-        if (fnError) {
-          setError("Не вдалося перевірити налаштування авторизації");
-          setMode("login");
-          return;
-        }
-        setMode(data?.needsSetup ? "setup" : "login");
-      });
-    return () => { active = false; };
+    setError("");
+    setMode("login");
   }, []);
 
   const enter = async () => {
     if (!login.trim() || !pass) { setError("Введи логін і пароль"); return; }
     setBusy(true); setError("");
     const { error: authError } = await supabase.auth.signInWithPassword({
-      email: loginToEmail(login),
+      email: login.trim().includes("@") ? login.trim().toLowerCase() : loginToEmail(login),
       password: pass,
     });
     if (authError) setError("Невірний логін або пароль");
