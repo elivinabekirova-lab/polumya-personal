@@ -345,15 +345,49 @@ export default function App() {
         .eq("user_id", user.id)
         .maybeSingle();
 
-      if (error || !profile?.active) {
+      const metadata = user.user_metadata || {};
+      const resolvedProfile =
+        profile?.active
+          ? profile
+          : {
+              user_id: user.id,
+              role: metadata.role || "employee",
+              staff_id: metadata.staff_id || null,
+              display_name:
+                metadata.display_name ||
+                metadata.name ||
+                user.email ||
+                "Працівник",
+              active: metadata.active !== false,
+            };
+
+      if (!resolvedProfile.active) {
         await supabase.auth.signOut();
-        if (active) { setMe(null); setAuthReady(true); setLoading(false); }
+        if (active) {
+          setMe(null);
+          setAuthReady(true);
+          setLoading(false);
+        }
         return;
       }
 
-      const sessionProfile = profile.role === "admin"
-        ? { type: "admin", userId: user.id, name: profile.display_name || "Адміністратор" }
-        : { type: "emp", userId: user.id, id: profile.staff_id, name: profile.display_name || "Працівник" };
+      const sessionProfile =
+        resolvedProfile.role === "admin"
+          ? {
+              type: "admin",
+              userId: user.id,
+              name:
+                resolvedProfile.display_name ||
+                "Адміністратор",
+            }
+          : {
+              type: "emp",
+              userId: user.id,
+              id: resolvedProfile.staff_id,
+              name:
+                resolvedProfile.display_name ||
+                "Працівник",
+            };
 
       if (active) setMe(sessionProfile);
 
@@ -556,18 +590,28 @@ function AuthLogin() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    setError("");
-    setMode("login");
+    let active = true;
+    supabase.functions.invoke("bootstrap-admin", { body: { action: "status" } })
+      .then(({ data, error: fnError }) => {
+        if (!active) return;
+        if (fnError) {
+          setError("Не вдалося перевірити налаштування авторизації");
+          setMode("login");
+          return;
+        }
+        setMode(data?.needsSetup ? "setup" : "login");
+      });
+    return () => { active = false; };
   }, []);
 
   const enter = async () => {
     if (!login.trim() || !pass) { setError("Введи логін і пароль"); return; }
     setBusy(true); setError("");
     const { error: authError } = await supabase.auth.signInWithPassword({
-      email: login.trim().includes("@") ? login.trim().toLowerCase() : loginToEmail(login),
+      email: loginToEmail(login),
       password: pass,
     });
-    if (authError) setError(authError.message || "Невірний логін або пароль");
+    if (authError) setError("Невірний логін або пароль");
     setBusy(false);
   };
 
