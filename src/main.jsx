@@ -1,48 +1,16 @@
-import { StrictMode } from 'react'
-import { createRoot } from 'react-dom/client'
-import './index.css'
-import App from './App.jsx'
+import React from "react";
+import ReactDOM from "react-dom/client";
+import App from "./App.jsx";
+import "./index.css";
 
-import { registerSW } from "virtual:pwa-register";
+const rootElement = document.getElementById("root");
 
-const updateSW = registerSW({
-  immediate: true,
-  onRegisteredSW(_swUrl, registration) {
-    if (!registration) return;
-
-    registration.update();
-
-    setInterval(() => {
-      registration.update();
-    }, 60 * 1000);
-
-    document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") {
-        registration.update();
-      }
-    });
-  },
-  onNeedRefresh() {
-    updateSW(true);
-  }
-});
-
-let reloading = false;
-
-if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.addEventListener(
-    "controllerchange",
-    () => {
-      if (reloading) return;
-      reloading = true;
-      window.location.reload();
-    }
-  );
+if (!rootElement) {
+  throw new Error('У index.html не знайдено елемент із id="root"');
 }
 
-
-createRoot(document.getElementById('root')).render(
-  <StrictMode>
+ReactDOM.createRoot(rootElement).render(
+  <React.StrictMode>
     <App />
-  </StrictMode>,
-)
+  </React.StrictMode>
+);
