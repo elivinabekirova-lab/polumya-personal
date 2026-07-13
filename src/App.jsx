@@ -19,6 +19,7 @@ const K_REQUESTS = "flame:requests";
 const K_PLANS = "flame:plans";
 const K_CLOSED_MONTHS = "flame:closedMonths";
 const K_AUDIT = "flame:audit";
+const K_DAILY_POINTS = "flame:dailyPoints";
 const AUTH_EMAIL_DOMAIN = "staff.polumya.app";
 const loginToEmail = (login) => {
   const value = String(login || "").trim().toLowerCase();
@@ -122,6 +123,9 @@ const normalizePerson = (person) => ({
   rate: Number(person.rate) || 0,
 });
 
+const workPointFor = (dailyPoints, day, person) =>
+  dailyPoints?.[day]?.[person.id] || normalizePerson(person).point;
+
 const periodOf = (date) => {
   const d = date.getDate();
   const y = date.getFullYear();
@@ -195,9 +199,9 @@ function getPointCash(cash, day, point) {
   };
 }
 
-function distributePool({ pool, profession, point, day, staff, shifts, perEmp, byPoint, undistributed }) {
+function distributePool({ pool, profession, point, day, staff, shifts, dailyPoints, perEmp, byPoint, undistributed }) {
   if (pool <= 0) return;
-  const workers = staff.filter((p) => p.point === point && p.profession === profession && isPaidShift(shifts[day]?.[p.id]));
+  const workers = staff.filter((p) => workPointFor(dailyPoints, day, p) === point && p.profession === profession && isPaidShift(shifts[day]?.[p.id]));
   const weight = workers.reduce((sum, p) => sum + Number(shifts[day][p.id]), 0);
   if (!weight) {
     undistributed.value += pool;
@@ -212,7 +216,7 @@ function distributePool({ pool, profession, point, day, staff, shifts, perEmp, b
   });
 }
 
-function calculateAccrual(staffInput, shifts, cash, afterDay, rulesInput) {
+function calculateAccrual(staffInput, shifts, cash, afterDay, rulesInput, dailyPoints = {}) {
   const staff = staffInput.map(normalizePerson);
   const rules = { ...DEFAULT_PERCENT_RULES, ...(rulesInput || {}) };
   const perEmp = {};
@@ -235,7 +239,7 @@ function calculateAccrual(staffInput, shifts, cash, afterDay, rulesInput) {
         Object.entries(c.waiterCash || {}).forEach(([employeeId, rawCash]) => {
           const personalCash = Number(rawCash) || 0;
           if (personalCash <= 0) return;
-          const person = staff.find((p) => p.id === employeeId && p.point === point && p.profession === "Офіціант");
+          const person = staff.find((p) => p.id === employeeId && workPointFor(dailyPoints, day, p) === point && p.profession === "Офіціант");
           if (!person) return;
           const waiterPart = personalCash * (Number(r.waiterRate) || 0) / 100 * netFactor;
           const barPart = personalCash * (Number(r.waiterBarRate) || 0) / 100 * netFactor;
@@ -257,19 +261,19 @@ function calculateAccrual(staffInput, shifts, cash, afterDay, rulesInput) {
         const kitchenPool = c.kitchen * (Number(r.kitchenRate) || 0) / 100 * netFactor;
         const barOwnPool = c.bar * (Number(r.barRate) || 0) / 100 * netFactor;
         const cleaningOwnPool = c.kitchen * (Number(r.cleaningRate) || 0) / 100 * netFactor;
-        distributePool({ pool: kitchenPool, profession: "Кухня", point, day, staff, shifts, perEmp, byPoint, undistributed });
-        distributePool({ pool: barOwnPool + barTransfer, profession: "Бармен", point, day, staff, shifts, perEmp, byPoint, undistributed });
-        distributePool({ pool: cleaningOwnPool + cleaningTransfer, profession: "Прибиральниця", point, day, staff, shifts, perEmp, byPoint, undistributed });
+        distributePool({ pool: kitchenPool, profession: "Кухня", point, day, staff, shifts, dailyPoints, perEmp, byPoint, undistributed });
+        distributePool({ pool: barOwnPool + barTransfer, profession: "Бармен", point, day, staff, shifts, dailyPoints, perEmp, byPoint, undistributed });
+        distributePool({ pool: cleaningOwnPool + cleaningTransfer, profession: "Прибиральниця", point, day, staff, shifts, dailyPoints, perEmp, byPoint, undistributed });
       } else if (point === "Підгір'я") {
         const totalFund = c.total * (Number(r.pointRate) || 0) / 100 * netFactor;
         const kitchenPool = totalFund * (Number(r.kitchenShare) || 0) / 100;
         const hallPool = totalFund * (Number(r.hallShare) || 0) / 100 + (Number(c.roomService) || 0);
-        distributePool({ pool: kitchenPool, profession: "Кухня", point, day, staff, shifts, perEmp, byPoint, undistributed });
-        distributePool({ pool: hallPool, profession: "Бармен", point, day, staff, shifts, perEmp, byPoint, undistributed });
+        distributePool({ pool: kitchenPool, profession: "Кухня", point, day, staff, shifts, dailyPoints, perEmp, byPoint, undistributed });
+        distributePool({ pool: hallPool, profession: "Бармен", point, day, staff, shifts, dailyPoints, perEmp, byPoint, undistributed });
       } else if (point === "SPA") {
         const percentPool = c.total * (Number(r.pointRate) || 0) / 100 * netFactor;
         const hookahPool = (Number(c.hookahs) || 0) * (Number(r.hookahUnitRate) || 0);
-        distributePool({ pool: percentPool + hookahPool, profession: "Бармен", point, day, staff, shifts, perEmp, byPoint, undistributed });
+        distributePool({ pool: percentPool + hookahPool, profession: "Бармен", point, day, staff, shifts, dailyPoints, perEmp, byPoint, undistributed });
       }
 
       if (byPoint[point].undistributed > 0 && !undistributedDays.includes(day)) undistributedDays.push(day);
@@ -323,6 +327,7 @@ export default function App() {
   const [plans, setPlans] = useState({});
   const [closedMonths, setClosedMonths] = useState([]);
   const [audit, setAudit] = useState([]);
+  const [dailyPoints, setDailyPoints] = useState({});
   const [me, setMe] = useState(null);
   const [authReady, setAuthReady] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -389,6 +394,7 @@ export default function App() {
       setPlans((await sGet(K_PLANS, true)) || {});
       setClosedMonths((await sGet(K_CLOSED_MONTHS, true)) || []);
       setAudit((await sGet(K_AUDIT, true)) || []);
+      setDailyPoints((await sGet(K_DAILY_POINTS, true)) || {});
       setSettings(loadedSettings);
       setLastSync(new Date());
       setAuthReady(true);
@@ -408,9 +414,9 @@ export default function App() {
 
   const refresh = async () => {
     if (pending.current > 0) return;
-    const [st, sh, ca, po, ru, se, an, rq, pl, cl, au] = await Promise.all([
+    const [st, sh, ca, po, ru, se, an, rq, pl, cl, au, dp] = await Promise.all([
       sGet(K_STAFF, true), sGet(K_SHIFTS, true), sGet(K_CASH, true), sGet(K_PAYOUTS, true), sGet(K_RULES, true), sGet(K_SETTINGS, true),
-      sGet(K_ANNOUNCEMENTS, true), sGet(K_REQUESTS, true), sGet(K_PLANS, true), sGet(K_CLOSED_MONTHS, true), sGet(K_AUDIT, true),
+      sGet(K_ANNOUNCEMENTS, true), sGet(K_REQUESTS, true), sGet(K_PLANS, true), sGet(K_CLOSED_MONTHS, true), sGet(K_AUDIT, true), sGet(K_DAILY_POINTS, true),
     ]);
     if (st) setStaff(st.map(normalizePerson));
     if (sh) setShifts(sh);
@@ -423,6 +429,7 @@ export default function App() {
     if (pl) setPlans(pl);
     if (cl) setClosedMonths(cl);
     if (au) setAudit(au);
+    if (dp) setDailyPoints(dp);
     setLastSync(new Date());
   };
 
@@ -454,6 +461,15 @@ export default function App() {
     const next = { ...latest };
     if (Object.keys(rec).length) next[day] = rec; else delete next[day];
     return saveShared(K_SHIFTS, next, setShifts);
+  };
+
+  const writeDailyPoint = async (day, id, point) => {
+    const latest = (await sGet(K_DAILY_POINTS, true)) || dailyPoints;
+    const rec = { ...(latest[day] || {}) };
+    if (point) rec[id] = point; else delete rec[id];
+    const next = { ...latest };
+    if (Object.keys(rec).length) next[day] = rec; else delete next[day];
+    return saveShared(K_DAILY_POINTS, next, setDailyPoints);
   };
 
   const writeCash = async (day, point, entry) => {
@@ -500,55 +516,36 @@ export default function App() {
 
   const lastPayoutDay = payouts.length ? [...payouts].map((p) => p.upTo).sort().at(-1) : null;
 
+  const guestReviewPage = typeof window !== "undefined" && (window.location.pathname === "/review" || new URLSearchParams(window.location.search).has("review"));
+  if (guestReviewPage) return <Shell><GuestReviewPage staff={staff} /></Shell>;
   if (loading || !authReady) return <Shell><Centered>Завантажуємо дані…</Centered></Shell>;
   if (!me) return <Shell><AuthLogin /></Shell>;
   if (me.type === "emp") {
     const person = staff.find((p) => p.id === me.id);
     if (!person) return <Shell><Centered>Працівника не знайдено. Вийди та зайди знову.</Centered></Shell>;
-    return <Shell><EmployeeView person={person} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} announcements={announcements} requests={requests} saveRequests={saveRequests} writeShift={writeShift} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
+    return <Shell><EmployeeView person={person} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} announcements={announcements} requests={requests} saveRequests={saveRequests} writeShift={writeShift} dailyPoints={dailyPoints} writeDailyPoint={writeDailyPoint} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
   }
-  return <Shell><AdminView me={me} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} announcements={announcements} requests={requests} plans={plans} closedMonths={closedMonths} audit={audit} writeShift={writeShift} writeCash={writeCash} saveStaff={saveStaff} saveSettings={saveSettings} saveRules={saveRules} saveAnnouncements={saveAnnouncements} saveRequests={saveRequests} savePlans={savePlans} saveClosedMonths={saveClosedMonths} addAudit={addAudit} addPayout={addPayout} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
+  return <Shell><AdminView me={me} staff={staff} shifts={shifts} cash={cash} payouts={payouts} settings={settings} rules={rules} announcements={announcements} requests={requests} plans={plans} closedMonths={closedMonths} audit={audit} dailyPoints={dailyPoints} writeDailyPoint={writeDailyPoint} writeShift={writeShift} writeCash={writeCash} saveStaff={saveStaff} saveSettings={saveSettings} saveRules={saveRules} saveAnnouncements={saveAnnouncements} saveRequests={saveRequests} savePlans={savePlans} saveClosedMonths={saveClosedMonths} addAudit={addAudit} addPayout={addPayout} onLogout={logout} lastPayoutDay={lastPayoutDay} saveStatus={saveStatus} lastSync={lastSync} onRefresh={refresh} /></Shell>;
 }
 
 function Shell({ children }) {
   return <div style={S.page}>
     <style>{`
-      @import url('https://fonts.googleapis.com/css2?family=Alegreya:wght@500;700&family=Inter:wght@400;500;600;700&display=swap');
-      *{box-sizing:border-box} body{margin:0;background:#171512} button,input,textarea,select{font-family:inherit}
-      button{cursor:pointer} button:disabled{cursor:not-allowed} input::placeholder,textarea::placeholder{color:#d8d0c4;opacity:.85}
-      select option{background:#1c1a17;color:#fff} ::-webkit-scrollbar{height:8px;width:8px} ::-webkit-scrollbar-thumb{background:#49443c;border-radius:5px}
-      .finance-report,.waiter-report{border:1px solid #3b3730;border-radius:12px;overflow:hidden;background:#1d1b18}
+      @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap');
+      *{box-sizing:border-box} html,body,#root{margin:0;min-height:100%;background:#F5F2EC} button,input,textarea,select{font-family:inherit}
+      button{cursor:pointer} button:disabled{cursor:not-allowed} input::placeholder,textarea::placeholder{color:#A59D92;opacity:1}
+      select option{background:#fff;color:#252525} ::-webkit-scrollbar{height:8px;width:8px} ::-webkit-scrollbar-thumb{background:#CFC7BA;border-radius:5px}
+      table{border-collapse:collapse!important} th,td{border:1px solid #DDD6CB!important;padding:8px 9px!important} th{background:#F0ECE5;color:#4D473F;font-weight:800}
+      .finance-report,.waiter-report{border:1px solid #DDD6CB;border-radius:12px;overflow:hidden;background:#fff}
       .finance-report-head,.finance-report-row{display:grid;grid-template-columns:1.05fr repeat(5,minmax(110px,1fr));align-items:center}
-      .finance-report-head{background:#2a2722;color:#eee7dc;font-size:12px;font-weight:700}
-      .finance-report-head span,.finance-report-row>div{padding:12px;border-right:1px solid #3b3730}
-      .finance-report-row{border-top:1px solid #3b3730}
-      .finance-report-row small{display:none;color:#cfc7bb;font-size:11px;margin-bottom:4px}
-      .finance-report-row b{display:block;color:#fff}
-      .finance-title{font-family:Alegreya,serif;font-size:18px;font-weight:700}
-      .waiter-report-head,.waiter-report-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;padding:12px 14px}
-      .waiter-report-head{background:#2a2722;color:#eee7dc;font-size:12px;font-weight:700}
-      .waiter-report-row{border-top:1px solid #3b3730}
-      .waiter-report-row b{text-align:right}
-      @media(max-width:720px){
-        .finance-report-head{display:none}
-        .finance-report{border:0;background:transparent;display:grid;gap:10px}
-        .finance-report-row{grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #3b3730;border-radius:12px;background:#1d1b18;overflow:hidden}
-        .finance-report-row>div{border-right:0;border-bottom:1px solid #3b3730;padding:11px}
-        .finance-report-row>div:nth-last-child(-n+2){border-bottom:0}
-        .finance-title{grid-column:1/-1;background:#2a2722;border-bottom:1px solid #3b3730!important}
-        .finance-report-row small{display:block}
-        .waiter-report-head{display:none}
-        .waiter-report-row{grid-template-columns:1fr auto;gap:6px 12px}
-        .waiter-report-row span{font-weight:700}
-        .waiter-report-row b:nth-child(2)::before{content:'Каса: ';color:#cfc7bb;font-weight:400}
-        .waiter-report-row b:nth-child(3){grid-column:1/-1;text-align:left}
-        .waiter-report-row b:nth-child(3)::before{content:'Нараховано: ';color:#cfc7bb;font-weight:400}
-      }
-    `}</style>
-    {children}
-  </div>;
+      .finance-report-head{background:#EEE8DE;color:#4D473F;font-size:12px;font-weight:800}
+      .finance-report-head span,.finance-report-row>div{padding:12px;border-right:1px solid #DDD6CB}.finance-report-row{border-top:1px solid #DDD6CB}
+      .finance-report-row small{display:none;color:#766F65;font-size:11px;margin-bottom:4px}.finance-report-row b{display:block;color:#252525}.finance-title{font-family:'Playfair Display',serif;font-size:18px;font-weight:700}
+      .waiter-report-head,.waiter-report-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;align-items:center;padding:12px 14px}.waiter-report-head{background:#EEE8DE;color:#4D473F;font-size:12px;font-weight:800}.waiter-report-row{border-top:1px solid #DDD6CB}.waiter-report-row b{text-align:right}
+      @media(max-width:720px){.finance-report-head{display:none}.finance-report{border:0;background:transparent;display:grid;gap:10px}.finance-report-row{grid-template-columns:repeat(2,minmax(0,1fr));border:1px solid #DDD6CB;border-radius:12px;background:#fff;overflow:hidden}.finance-report-row>div{border-right:0;border-bottom:1px solid #DDD6CB;padding:11px}.finance-report-row>div:nth-last-child(-n+2){border-bottom:0}.finance-title{grid-column:1/-1;background:#EEE8DE;border-bottom:1px solid #DDD6CB!important}.finance-report-row small{display:block}.waiter-report-head{display:none}.waiter-report-row{grid-template-columns:1fr auto;gap:6px 12px}.waiter-report-row span{font-weight:700}.waiter-report-row b:nth-child(2)::before{content:'Каса: ';color:#766F65;font-weight:400}.waiter-report-row b:nth-child(3){grid-column:1/-1;text-align:left}.waiter-report-row b:nth-child(3)::before{content:'Нараховано: ';color:#766F65;font-weight:400}}
+    `}</style>{children}</div>;
 }
-function Centered({ children }) { return <div style={{ textAlign: "center", marginTop: 90, color: "#fff" }}>{children}</div>; }
+function Centered({ children }) { return <div style={{ textAlign: "center", marginTop: 90, color: "#4D473F" }}>{children}</div>; }
 function Brand({ small = false }) {
   return <div className="brand-lockup" style={{ display: "flex", alignItems: "center", gap: small ? 9 : 12 }}>
     <div className="brand-mark" style={{ width: small ? 38 : 48, height: small ? 38 : 48 }}>
@@ -695,14 +692,15 @@ function ShiftReminderControl({ person }) {
   </div>;
 }
 
-function EmployeeView({ person, staff, shifts, cash, settings, rules, announcements, requests, saveRequests, writeShift, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
+function EmployeeView({ person, staff, shifts, cash, settings, rules, announcements, requests, saveRequests, writeShift, dailyPoints, writeDailyPoint, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
   const today = new Date();
   const todayKey = dk(today);
   const selected = shifts[todayKey]?.[person.id];
   const hasChoice = selected !== undefined;
+  const todayPoint = workPointFor(dailyPoints, todayKey, person);
   const [period, setPeriod] = useState(() => periodOf(today));
   const stats = useMemo(() => periodStats(shifts, period)[person.id] || { full: 0, half: 0, total: 0 }, [shifts, period, person.id]);
-  const accrual = useMemo(() => calculateAccrual(staff, shifts, cash, lastPayoutDay, settings.percentRules), [staff, shifts, cash, lastPayoutDay, settings.percentRules]);
+  const accrual = useMemo(() => calculateAccrual(staff, shifts, cash, lastPayoutDay, settings.percentRules, dailyPoints), [staff, shifts, cash, lastPayoutDay, settings.percentRules, dailyPoints]);
   const myPercent = accrual.perEmp[person.id] || 0;
   const choices = [
     [1, "🔥 Повна зміна"],
@@ -715,14 +713,14 @@ function EmployeeView({ person, staff, shifts, cash, settings, rules, announceme
   const monthValues = Array.from({ length: monthDays }, (_, i) => shifts[`${monthPrefix}-${pad(i + 1)}`]?.[person.id]);
   const monthPaid = monthValues.reduce((sum, v) => sum + (isPaidShift(v) ? Number(v) : 0), 0);
   const monthTraining = monthValues.filter((v) => v === "training").length;
-  const monthCash = Object.keys(cash).filter((d) => d.startsWith(monthPrefix)).reduce((sum, day) => sum + (Number(getPointCash(cash, day, person.point).waiterCash?.[person.id]) || 0), 0);
+  const monthCash = Object.keys(cash).filter((d) => d.startsWith(monthPrefix)).reduce((sum, day) => sum + (Number(getPointCash(cash, day, workPointFor(dailyPoints, day, person)).waiterCash?.[person.id]) || 0), 0);
   const activeAnnouncements = (announcements || []).filter((a) => !a.expiresAt || a.expiresAt >= todayKey);
   const myRequests = (requests || []).filter((r) => r.employeeId === person.id).sort((a,b) => String(b.createdAt).localeCompare(String(a.createdAt)));
   const [requestType, setRequestType] = useState("Виправлення табеля");
   const [requestText, setRequestText] = useState("");
   const sendRequest = async () => {
     if (!requestText.trim()) return;
-    await saveRequests([...(requests || []), { id: uid(), employeeId: person.id, employeeName: person.name, point: person.point, type: requestType, text: requestText.trim(), status: "new", createdAt: new Date().toISOString() }]);
+    await saveRequests([...(requests || []), { id: uid(), employeeId: person.id, employeeName: person.name, point: todayPoint, type: requestType, text: requestText.trim(), status: "new", createdAt: new Date().toISOString() }]);
     setRequestText("");
   };
   const achievements = [
@@ -734,9 +732,14 @@ function EmployeeView({ person, staff, shifts, cash, settings, rules, announceme
   return <main style={{ maxWidth: 620, margin: "0 auto" }}>
     <Header onLogout={onLogout} />
     <div style={S.card}>
-      <h2 style={{ margin: 0, color: "#fff" }}>Привіт, {person.name}!</h2>
-      <p style={{ color: "#e9e2d8", marginTop: 5 }}>{person.point} · {person.profession}</p>
-      <p style={{ color: "#fff" }}>Сьогодні, {today.getDate()} {MONTHS_G[today.getMonth()]}</p>
+      <h2 style={{ margin: 0, color: "#4D473F" }}>Привіт, {person.name}!</h2>
+      <p style={{ color: "#6F675D", marginTop: 5 }}>{todayPoint} · {person.profession}</p>
+      <div style={{ margin: "12px 0" }}>
+        <div style={S.label}>Де ти сьогодні працюєш?</div>
+        <div style={S.pointTabs}>{POINTS.map((point) => <button key={point} disabled={hasChoice} style={{ ...S.tab, ...(todayPoint === point ? S.tabOn : {}), ...(hasChoice && todayPoint !== point ? { opacity: .45 } : {}) }} onClick={() => !hasChoice && writeDailyPoint(todayKey, person.id, point)}>{point}</button>)}</div>
+        <p style={S.hint}>Обери точку до відмітки статусу. Після цього змінити її зможе адміністратор.</p>
+      </div>
+      <p style={{ color: "#4D473F" }}>Сьогодні, {today.getDate()} {MONTHS_G[today.getMonth()]}</p>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(2,minmax(0,1fr))", gap: 8 }}>
         {choices.map(([value, label]) => <button key={String(value)} disabled={hasChoice} style={{ ...S.bigBtn, ...(selected === value ? S.bigOn : {}), ...(hasChoice && selected !== value ? { opacity: .42 } : {}) }} onClick={() => !hasChoice && writeShift(todayKey, person.id, value)}>{label}</button>)}
       </div>
@@ -745,7 +748,7 @@ function EmployeeView({ person, staff, shifts, cash, settings, rules, announceme
       {saveStatus?.state === "saved" && <p style={S.success}>✓ Збережено</p>}
       {saveStatus?.state === "error" && <p style={S.error}>Не вдалося зберегти. Спробуй ще раз.</p>}
     </div>
-    {PERCENT_PROFESSIONS.includes(person.profession) && <div style={{ ...S.card, marginTop: 12, borderColor: "#e8763a" }}>
+    {PERCENT_PROFESSIONS.includes(person.profession) && <div style={{ ...S.card, marginTop: 12, borderColor: "#B58742" }}>
       <h3 style={S.h3}>Твій накопичений %</h3>
       <div style={S.emberAmount}>{money(myPercent)}</div>
       {person.profession === "Офіціант" && <p style={S.hint}>Розраховано лише від твоєї особистої каси, внесеної адміністратором.</p>}
@@ -776,7 +779,7 @@ function EmployeeView({ person, staff, shifts, cash, settings, rules, announceme
   </main>;
 }
 
-function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announcements, requests, plans, closedMonths, audit, writeShift, writeCash, saveStaff, saveSettings, saveRules, saveAnnouncements, saveRequests, savePlans, saveClosedMonths, addAudit, addPayout, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
+function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announcements, requests, plans, closedMonths, audit, dailyPoints, writeDailyPoint, writeShift, writeCash, saveStaff, saveSettings, saveRules, saveAnnouncements, saveRequests, savePlans, saveClosedMonths, addAudit, addPayout, onLogout, lastPayoutDay, saveStatus, lastSync, onRefresh }) {
   const today = new Date();
   const todayKey = dk(today);
   const [tab, setTab] = useState("control");
@@ -814,7 +817,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
     return g;
   }, {}), [normalizedStaff]);
   const stats = useMemo(() => periodStats(shifts, period), [shifts, period]);
-  const accrual = useMemo(() => calculateAccrual(normalizedStaff, shifts, cash, lastPayoutDay, settings.percentRules), [normalizedStaff, shifts, cash, lastPayoutDay, settings.percentRules]);
+  const accrual = useMemo(() => calculateAccrual(normalizedStaff, shifts, cash, lastPayoutDay, settings.percentRules, dailyPoints), [normalizedStaff, shifts, cash, lastPayoutDay, settings.percentRules, dailyPoints]);
   const totalPay = normalizedStaff.reduce((sum, p) => sum + (stats[p.id]?.total || 0) * p.rate, 0);
   const waiters = normalizedStaff.filter((p) => p.point === "Полум'я" && p.profession === "Офіціант");
   const monthPrefix = `${month.getFullYear()}-${pad(month.getMonth() + 1)}`;
@@ -852,7 +855,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
       POINTS.forEach((point) => {
         const rec = getPointCash(cash, day, point);
         const hasCash = rec.total > 0 || rec.kitchen > 0 || rec.bar > 0;
-        const workers = normalizedStaff.filter((p) => p.point === point && isPaidShift(shifts[day]?.[p.id]));
+        const workers = normalizedStaff.filter((p) => workPointFor(dailyPoints, day, p) === point && isPaidShift(shifts[day]?.[p.id]));
         if (hasCash && !workers.length) out.push(`${dayLabel(day)} · ${point}: є каса, але немає змін`);
         if (!hasCash && workers.length) out.push(`${dayLabel(day)} · ${point}: є працівники, але немає каси`);
         if (point === "Полум'я") {
@@ -971,7 +974,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
       <Stat title="Нерозподілено" value={money(accrual.undistributed)} />
     </div>
     <nav style={S.tabs}>{[
-      ["control", "Центр керування"], ["day", "День"], ["cash", "Каса та %"], ["grid", "Табель"], ["pay", "Зарплата"], ["finance", "Фінзвіт"], ["requests", "Запити"], ["announcements", "Оголошення"], ["staff", "Персонал"], ["rules", "Правила"],
+      ["control", "Центр керування"], ["day", "День"], ["cash", "Каса та %"], ["grid", "Табель"], ["pay", "Зарплата"], ["finance", "Фінзвіт"], ["requests", "Запити"], ["announcements", "Оголошення"], ["reviews", "Відгуки"], ["integrations", "Інтеграції"], ["staff", "Персонал"], ["rules", "Правила"],
     ].map(([key, label]) => <button key={key} style={{ ...S.tab, ...(tab === key ? S.tabOn : {}) }} onClick={() => setTab(key)}>{label}</button>)}</nav>
 
     {tab === "control" && <>
@@ -994,9 +997,10 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
         const [point, profession] = group.split("|");
         return <section key={group}><div style={S.label}>{point} · {profession}</div>{people.map((p) => {
           const value = shifts[selectedDay]?.[p.id];
-          return <div key={p.id} style={{ ...S.row, ...(value !== undefined ? { borderColor: "#e8763a" } : {}) }}>
+          return <div key={p.id} style={{ ...S.row, ...(value !== undefined ? { borderColor: "#B58742" } : {}) }}>
             <b>{p.name}</b>
-            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
+              <select style={{ ...S.input, minWidth: 126 }} value={workPointFor(dailyPoints, selectedDay, p)} onChange={(e) => writeDailyPoint(selectedDay, p.id, e.target.value)}>{POINTS.map((point) => <option key={point} value={point}>{point}</option>)}</select>
               {[[1, "Повна"], [0.5, "½"], ["training", "Стажування"], ["off", "Вихідний"]].map(([v, label]) => <button key={String(v)} style={{ ...S.chip, ...(value === v ? S.chipOn : {}) }} onClick={() => writeShift(selectedDay, p.id, value === v ? null : v)}>{label}</button>)}
             </div>
           </div>;
@@ -1033,8 +1037,8 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
       </div>
 
       <div style={{ ...S.card, marginBottom: 12 }}>
-        <div style={S.sectionHead}><h2 style={S.h2}>Нараховано · {cashPoint}</h2><button style={{ ...S.primary, background: "#607454" }} onClick={doPayout}>Виплатити всі % · {money(accrual.total)}</button></div>
-        {normalizedStaff.filter((p) => p.point === cashPoint && PERCENT_PROFESSIONS.includes(p.profession)).map((p) => <div key={p.id} style={S.lineRow}><span><b>{p.name}</b><small style={S.smallText}>{p.profession}</small></span><strong style={{ color: "#ff9a64" }}>{money(accrual.perEmp[p.id] || 0)}</strong></div>)}
+        <div style={S.sectionHead}><h2 style={S.h2}>Нараховано · {cashPoint}</h2><button style={{ ...S.primary, background: "#4F775D" }} onClick={doPayout}>Виплатити всі % · {money(accrual.total)}</button></div>
+        {normalizedStaff.filter((p) => p.point === cashPoint && PERCENT_PROFESSIONS.includes(p.profession)).map((p) => <div key={p.id} style={S.lineRow}><span><b>{p.name}</b><small style={S.smallText}>{p.profession}</small></span><strong style={{ color: "#9A6A24" }}>{money(accrual.perEmp[p.id] || 0)}</strong></div>)}
         {cashPoint === "Полум'я" && waiters.map((p) => {
           const d = accrual.waiterDetails[p.id];
           return d ? <div key={`detail-${p.id}`} style={S.detailBox}><b>{p.name}</b>: особиста каса {money(d.cash)} → офіціанту {money(d.netToWaiter)} · бару {money(d.barPart)} · прибиранню {money(d.cleaningPart)}</div> : null;
@@ -1056,7 +1060,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
         const day = `${monthPrefix}-${pad(i + 1)}`;
         const value = shifts[day]?.[p.id];
         const nextValue = value === undefined ? 1 : value === 1 ? 0.5 : value === 0.5 ? "training" : value === "training" ? "off" : null;
-        return <td key={i}><button title={String(value || "")} style={{ ...S.cell, background: value === 1 ? "#e8763a" : value === 0.5 ? "linear-gradient(135deg,#e8763a 50%,#2a2722 50%)" : value === "training" ? "#766243" : value === "off" ? "#64605a" : "#2a2722" }} onClick={() => writeShift(day, p.id, nextValue)} /></td>;
+        return <td key={i}><button title={String(value || "")} style={{ ...S.cell, background: value === 1 ? "#B58742" : value === 0.5 ? "linear-gradient(135deg,#B58742 50%,#F3EFE7 50%)" : value === "training" ? "#E2D4BA" : value === "off" ? "#D7D2CA" : "#F3EFE7" }} onClick={() => writeShift(day, p.id, nextValue)} /></td>;
       })}</tr>)}</tbody></table></div>
       <p style={S.hint}>Клік: повна → половина → стажування → вихідний → порожньо.</p>
     </div>}
@@ -1092,12 +1096,12 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
             <div><small>Бар</small><b>{money(monthCashSummary[point].bar)}</b></div>
             <div><small>Загальна каса</small><b>{money(monthCashSummary[point].total)}</b></div>
             <div><small>Особисті каси</small><b>{point === "Полум'я" ? money(monthCashSummary[point].waiter) : "—"}</b></div>
-            <div><small>Нараховано %</small><b style={{ color: "#ff9a64" }}>{money(accrual.byPoint[point]?.total || 0)}</b></div>
+            <div><small>Нараховано %</small><b style={{ color: "#9A6A24" }}>{money(accrual.byPoint[point]?.total || 0)}</b></div>
           </div>
         ))}
       </div>
 
-      <div style={{ ...S.card, marginTop: 16, background: "#2a2722", textAlign: "center" }}>
+      <div style={{ ...S.card, marginTop: 16, background: "#F3EFE7", textAlign: "center" }}>
         <h3 style={S.h3}>🏆 Найкращий офіціант місяця</h3>
         {bestWaiter && (waiterMonthCash[bestWaiter.id] || 0) > 0
           ? <div style={S.emberAmount}>{bestWaiter.name} · {money(waiterMonthCash[bestWaiter.id])}</div>
@@ -1111,7 +1115,7 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
           <div className="waiter-report-row" key={person.id}>
             <span>{person.name}</span>
             <b>{money(waiterMonthCash[person.id] || 0)}</b>
-            <b style={{ color: "#ff9a64" }}>{money(accrual.waiterDetails?.[person.id]?.netToWaiter || 0)}</b>
+            <b style={{ color: "#9A6A24" }}>{money(accrual.waiterDetails?.[person.id]?.netToWaiter || 0)}</b>
           </div>
         ))}
       </div>
@@ -1120,6 +1124,10 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
     {tab === "requests" && <div style={S.card}><h2 style={S.h2}>Запити працівників</h2>{(requests||[]).length?(requests||[]).slice().reverse().map(r=><div key={r.id} style={S.requestAdmin}><div><b>{r.employeeName} · {r.type}</b><small style={S.smallText}>{r.point} · {new Date(r.createdAt).toLocaleString("uk-UA")}</small><p style={{margin:"7px 0"}}>{r.text}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{r.status==="new"?<><button style={S.primary} onClick={()=>decideRequest(r.id,"approved")}>Схвалити</button><button style={S.ghost} onClick={()=>decideRequest(r.id,"rejected")}>Відхилити</button></>:<b>{r.status==="approved"?"Схвалено":"Відхилено"}</b>}</div></div>):<p style={S.hint}>Нових запитів немає.</p>}</div>}
 
     {tab === "announcements" && <div style={S.card}><h2 style={S.h2}>Оголошення для персоналу</h2><div style={S.formGrid}><Field label="Заголовок"><input style={S.inputFull} value={announcementForm.title} onChange={e=>setAnnouncementForm({...announcementForm,title:e.target.value})}/></Field><Field label="Показувати до"><input style={S.inputFull} type="date" value={announcementForm.expiresAt} onChange={e=>setAnnouncementForm({...announcementForm,expiresAt:e.target.value})}/></Field></div><textarea style={{...S.textarea,marginTop:10}} rows={4} placeholder="Текст оголошення" value={announcementForm.text} onChange={e=>setAnnouncementForm({...announcementForm,text:e.target.value})}/><button style={{...S.primary,marginTop:8}} onClick={createAnnouncement}>Опублікувати</button><div style={{marginTop:14}}>{(announcements||[]).slice().reverse().map(a=><div style={S.notice} key={a.id}><div style={S.sectionHead}><b>{a.title}</b><button style={S.ghost} onClick={()=>saveAnnouncements((announcements||[]).filter(x=>x.id!==a.id))}>Видалити</button></div><p>{a.text}</p><small>{a.author} · {new Date(a.createdAt).toLocaleString("uk-UA")}</small></div>)}</div></div>}
+
+    {tab === "reviews" && <ReviewsPanel settings={settings} saveSettings={saveSettings} staff={normalizedStaff} addAudit={addAudit} />}
+
+    {tab === "integrations" && <IntegrationPanel settings={settings} saveSettings={saveSettings} addAudit={addAudit} />}
 
     {tab === "staff" && <div style={S.card}>
       <div style={S.sectionHead}><h2 style={S.h2}>Персонал</h2><button style={S.primary} onClick={() => setStaffForm({ name: "", point: "Полум'я", profession: "Офіціант", rate: "", login: "", password: "", active: true })}>+ Додати</button></div>
@@ -1132,13 +1140,73 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
           <input style={S.input} type="password" placeholder={staffForm.id ? "Новий пароль (необов’язково)" : "Тимчасовий пароль"} value={staffForm.password || ""} onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })} />
         <div><button style={S.primary} onClick={submitStaff}>Зберегти</button> <button style={S.ghost} onClick={() => setStaffForm(null)}>Скасувати</button></div>
       </div>}
-      {POINTS.map((point) => <section key={point}><div style={S.label}>{point}</div>{normalizedStaff.filter((p) => p.point === point).map((p) => <div key={p.id} style={S.row}><span><b>{p.name}</b><small style={S.smallText}>{p.profession} · {p.rate ? `${money(p.rate)}/зміна` : "ставку не задано"}</small></span><span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}><button style={S.ghost} onClick={() => setStaffForm({ ...p, rate: String(p.rate || ""), login: p.login || "", password: "" })}>Змінити</button>{p.authUserId && <button style={S.ghost} onClick={() => resetStaffPassword(p)}>Новий пароль</button>}<button style={{ ...S.ghost, color: "#ffd4cb" }} onClick={() => confirm(`Видалити ${p.name}?`) && saveStaff(normalizedStaff.filter((x) => x.id !== p.id))}>Видалити</button></span></div>)}</section>)}
+      {POINTS.map((point) => <section key={point}><div style={S.label}>{point}</div>{normalizedStaff.filter((p) => p.point === point).map((p) => <div key={p.id} style={S.row}><span><b>{p.name}</b><small style={S.smallText}>{p.profession} · {p.rate ? `${money(p.rate)}/зміна` : "ставку не задано"}</small></span><span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}><button style={S.ghost} onClick={() => setStaffForm({ ...p, rate: String(p.rate || ""), login: p.login || "", password: "" })}>Змінити</button>{p.authUserId && <button style={S.ghost} onClick={() => resetStaffPassword(p)}>Новий пароль</button>}<button style={{ ...S.ghost, color: "#B95045" }} onClick={() => confirm(`Видалити ${p.name}?`) && saveStaff(normalizedStaff.filter((x) => x.id !== p.id))}>Видалити</button></span></div>)}</section>)}
     </div>}
 
     {tab === "rules" && <div style={S.card}><h2 style={S.h2}>Правила</h2><textarea style={S.textarea} rows={16} value={rulesDraft} onChange={(e) => setRulesDraft(e.target.value)} /><button style={{ ...S.primary, marginTop: 10 }} onClick={() => saveRules(rulesDraft)}>Зберегти правила</button></div>}
 
     <footer style={S.footer}>{saveStatus?.state === "saving" ? "Зберігаю…" : saveStatus?.state === "error" ? "Помилка збереження" : `Синхронізовано: ${lastSync ? lastSync.toLocaleTimeString("uk-UA") : "—"}`} · <button style={S.linkBtn} onClick={onRefresh}>Оновити</button></footer>
   </main>;
+}
+
+
+function GuestReviewPage({ staff }) {
+  const [form, setForm] = useState({ point: "Полум'я", rating: 5, name: "", waiter: "", text: "" });
+  const [status, setStatus] = useState("");
+  const [busy, setBusy] = useState(false);
+  const waiters = (staff || []).map(normalizePerson).filter((p) => p.profession === "Офіціант");
+  const submit = async () => {
+    if (!form.rating) return;
+    setBusy(true); setStatus("");
+    const { data, error } = await supabase.functions.invoke("guest-reviews", { body: { action: "submit", review: { ...form, createdAt: new Date().toISOString() } } });
+    if (error || !data?.ok) setStatus(data?.error || error?.message || "Не вдалося надіслати відгук");
+    else { setStatus("Дякуємо! Ваш відгук уже у команди Полум’я."); setForm({ point: "Полум'я", rating: 5, name: "", waiter: "", text: "" }); }
+    setBusy(false);
+  };
+  return <main style={{ maxWidth: 560, margin: "0 auto", paddingTop: 24 }}>
+    <div style={{ display: "flex", justifyContent: "center", marginBottom: 18 }}><Brand /></div>
+    <div style={S.card}>
+      <div style={S.eyebrow}>ВАША ДУМКА ВАЖЛИВА</div><h2 style={S.h2}>Як вам було сьогодні?</h2>
+      <div style={{ display: "flex", gap: 6, margin: "18px 0" }}>{[1,2,3,4,5].map((n)=><button key={n} onClick={()=>setForm({...form,rating:n})} style={{...S.star,...(form.rating>=n?S.starOn:{})}}>★</button>)}</div>
+      <div style={S.formGrid}><Field label="Локація"><select style={S.inputFull} value={form.point} onChange={e=>setForm({...form,point:e.target.value})}>{POINTS.map(p=><option key={p}>{p}</option>)}</select></Field><Field label="Офіціант (за бажанням)"><select style={S.inputFull} value={form.waiter} onChange={e=>setForm({...form,waiter:e.target.value})}><option value="">Не обрано</option>{waiters.map(w=><option key={w.id} value={w.name}>{w.name}</option>)}</select></Field></div>
+      <Field label="Ваше ім’я (за бажанням)"><input style={S.inputFull} value={form.name} onChange={e=>setForm({...form,name:e.target.value})}/></Field>
+      <textarea style={{...S.textarea,marginTop:10}} rows={5} placeholder="Розкажіть, що сподобалося або що нам варто покращити" value={form.text} onChange={e=>setForm({...form,text:e.target.value})}/>
+      <button style={{...S.primary,marginTop:12,width:"100%"}} disabled={busy} onClick={submit}>{busy?"Надсилаємо…":"Надіслати відгук"}</button>
+      {status && <p style={status.startsWith("Дякуємо")?S.success:S.error}>{status}</p>}
+    </div>
+  </main>;
+}
+
+function ReviewsPanel({ settings, saveSettings, addAudit }) {
+  const [reviews, setReviews] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [googleUrl, setGoogleUrl] = useState(settings.googleReviewUrl || "");
+  const load = async () => { setLoading(true); const { data } = await supabase.functions.invoke("guest-reviews", { body: { action: "list" } }); setReviews(data?.reviews || []); setLoading(false); };
+  useEffect(()=>{ load(); },[]);
+  const setStatus = async (id, status) => { await supabase.functions.invoke("guest-reviews", { body: { action: "update", id, status } }); await addAudit("Оновлено статус відгуку", `${id}: ${status}`); load(); };
+  const average = reviews.length ? reviews.reduce((s,r)=>s+Number(r.rating||0),0)/reviews.length : 0;
+  const reviewLink = `${window.location.origin}/review`;
+  return <div style={S.card}>
+    <div style={S.sectionHead}><div><div style={S.eyebrow}>GUEST EXPERIENCE</div><h2 style={S.h2}>Відгуки гостей</h2></div><button style={S.ghost} onClick={load}>Оновити</button></div>
+    <div style={S.stats}><Stat title="Середня оцінка" value={reviews.length?`${average.toFixed(1)} / 5`:"—"}/><Stat title="Усього відгуків" value={reviews.length}/><Stat title="Потребують уваги" value={reviews.filter(r=>Number(r.rating)<4&&r.status!=="resolved").length}/></div>
+    <div style={S.formGrid}><Field label="Посилання для QR / гостей"><input readOnly style={S.inputFull} value={reviewLink}/></Field><Field label="Посилання Google-відгуку"><input style={S.inputFull} placeholder="https://g.page/r/.../review" value={googleUrl} onChange={e=>setGoogleUrl(e.target.value)}/></Field></div>
+    <button style={{...S.primary,marginTop:10}} onClick={()=>saveSettings({...settings,googleReviewUrl:googleUrl})}>Зберегти посилання</button>
+    <p style={S.hint}>Гість залишає внутрішній відгук за першим посиланням. Для оцінок 4–5 можна дати кнопку переходу до Google; автоматично публікувати відгук замість гостя Google не дозволяє.</p>
+    <div style={{marginTop:14}}>{loading?<p style={S.hint}>Завантаження…</p>:reviews.length?reviews.map(r=><div key={r.id} style={S.reviewRow}><div><div style={{color:"#B58742",fontSize:18}}>{"★".repeat(Number(r.rating)||0)}<span style={{color:"#D8D0C4"}}>{"★".repeat(5-(Number(r.rating)||0))}</span></div><b>{r.name||"Гість"} · {r.point}</b><small style={S.smallText}>{r.waiter?`Офіціант: ${r.waiter} · `:""}{new Date(r.createdAt).toLocaleString("uk-UA")}</small><p style={{margin:"7px 0 0"}}>{r.text||"Без коментаря"}</p></div><div style={{display:"flex",gap:6,flexWrap:"wrap"}}>{googleUrl&&Number(r.rating)>=4&&<button style={S.ghost} onClick={()=>window.open(googleUrl,"_blank")}>Google</button>}<button style={S.ghost} onClick={()=>setStatus(r.id,"resolved")}>Опрацьовано</button></div></div>):<p style={S.hint}>Відгуків ще немає.</p>}</div>
+  </div>;
+}
+
+function IntegrationPanel({ settings, saveSettings, addAudit }) {
+  const current = settings.rkeeper || { enabled:false, mode:"manual", endpoint:"", locationCode:"", syncMinutes:5 };
+  const [draft,setDraft]=useState(current);
+  const save=async()=>{await saveSettings({...settings,rkeeper:draft});await addAudit("Оновлено налаштування r_keeper",draft.enabled?"Увімкнено":"Вимкнено");};
+  return <div style={S.card}>
+    <div style={S.sectionHead}><div><div style={S.eyebrow}>DATA CONNECTIONS</div><h2 style={S.h2}>Інтеграція r_keeper</h2></div><span style={{...S.statusPill,...(draft.enabled?S.statusOk:{})}}>{draft.enabled?"Готово до підключення":"Ручний режим"}</span></div>
+    <p style={S.hint}>Модуль підготовлений для автоматичного завантаження кас, продажів офіціантів, чеків і середнього чека. Для реального запуску потрібні адреса XML/White Server, доступ і ліцензія від вашого дилера r_keeper.</p>
+    <div style={S.formGrid}><Field label="Режим"><select style={S.inputFull} value={draft.mode} onChange={e=>setDraft({...draft,mode:e.target.value,enabled:e.target.value==="rkeeper"})}><option value="manual">Ручне внесення</option><option value="rkeeper">Автоматично з r_keeper</option></select></Field><Field label="Адреса локального конектора"><input style={S.inputFull} placeholder="http://192.168.1.10:8080" value={draft.endpoint||""} onChange={e=>setDraft({...draft,endpoint:e.target.value})}/></Field><Field label="Код ресторану / локації"><input style={S.inputFull} value={draft.locationCode||""} onChange={e=>setDraft({...draft,locationCode:e.target.value})}/></Field><Field label="Інтервал синхронізації, хв"><input type="number" min="1" style={S.inputFull} value={draft.syncMinutes||5} onChange={e=>setDraft({...draft,syncMinutes:Number(e.target.value)||5})}/></Field></div>
+    <button style={{...S.primary,marginTop:12}} onClick={save}>Зберегти інтеграцію</button>
+    <div style={{...S.detailBox,marginTop:14}}><b>Після підключення автоматично підтягуватимуться:</b><br/>загальна каса · кухня · бар · особисті продажі офіціантів · кількість чеків · середній чек · знижки · скасування · продажі по годинах.</div>
+  </div>;
 }
 
 function PercentEditor({ point, value, onChange }) {
@@ -1166,74 +1234,31 @@ function Field({ label, children }) { return <label style={S.field}><span>{label
 function Header({ onLogout, subtitle }) { return <header style={S.header}><div><Brand />{subtitle && <div style={S.headerSub}>{subtitle}</div>}</div><button style={S.ghost} onClick={onLogout}>Вийти</button></header>; }
 function PeriodNav({ period, setPeriod }) { return <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}><button style={S.nav} onClick={() => setPeriod(prevP(period))}>‹</button><b>{periodLabel(period)}</b><button style={S.nav} onClick={() => setPeriod(nextP(period))}>›</button></div>; }
 function MonthNav({ month, setMonth }) { return <div style={{ display: "flex", alignItems: "center", gap: 8 }}><button style={S.nav} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() - 1, 1))}>‹</button><b>{MONTHS[month.getMonth()]} {month.getFullYear()}</b><button style={S.nav} onClick={() => setMonth(new Date(month.getFullYear(), month.getMonth() + 1, 1))}>›</button></div>; }
-function Stat({ title, value, ember }) { return <div style={{ ...S.stat, ...(ember ? { borderColor: "#e8763a" } : {}) }}><div style={{ fontSize: 23, fontWeight: 700, color: ember ? "#ff9a64" : "#fff" }}>{value}</div><small style={{ color: "#eee7dc" }}>{title}</small></div>; }
-function Mini({ title, value }) { return <div style={S.mini}><b style={{ fontSize: 20 }}>{value}</b><small style={{ color: "#eee7dc" }}>{title}</small></div>; }
+function Stat({ title, value, ember }) { return <div style={{ ...S.stat, ...(ember ? { borderColor: "#B58742" } : {}) }}><div style={{ fontSize: 23, fontWeight: 700, color: ember ? "#9A6A24" : "#fff" }}>{value}</div><small style={{ color: "#665F56" }}>{title}</small></div>; }
+function Mini({ title, value }) { return <div style={S.mini}><b style={{ fontSize: 20 }}>{value}</b><small style={{ color: "#665F56" }}>{title}</small></div>; }
 
 const S = {
-  page: { minHeight: "100vh", background: "#0d0d0c", color: "#f7f4ed", fontFamily: "Inter,system-ui,sans-serif", padding: "18px 12px 48px" },
-  header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 18, padding: "4px 2px 12px", borderBottom: "1px solid #2b2924" },
-  headerSub: { color: "#9e978a", fontSize: 12, marginLeft: 60, marginTop: 2 },
-  card: { background: "linear-gradient(180deg,#171714 0%,#131311 100%)", border: "1px solid #302e28", borderRadius: 12, padding: 14, boxShadow: "0 10px 30px rgba(0,0,0,.18)" },
-  h2: { margin: 0, fontFamily: "Inter,system-ui,sans-serif", fontSize: 18, letterSpacing: "-.02em", color: "#f8f5ee", fontWeight: 750 },
-  h3: { margin: "0 0 10px", color: "#f8f5ee", fontFamily: "Inter,system-ui,sans-serif", fontSize: 16 },
-  eyebrow: { color: "#b89a58", fontSize: 10, fontWeight: 800, letterSpacing: ".16em", marginBottom: 4 },
-  label: { color: "#b8b0a2", fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".09em", margin: "12px 0 7px" },
-  input: { background: "#0e0e0d", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 8, padding: "9px 11px", fontSize: 13.5, outline: "none" },
-  inputFull: { width: "100%", background: "#0e0e0d", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 8, padding: "10px 11px", fontSize: 13.5, marginTop: 5 },
-  primary: { background: "linear-gradient(135deg,#d3b066,#9f7a35)", color: "#0b0b0a", border: "1px solid #d6ba79", borderRadius: 8, padding: "9px 14px", fontWeight: 800 },
-  ghost: { background: "#171714", color: "#e9e4da", border: "1px solid #3a372f", borderRadius: 8, padding: "7px 11px" },
-  loginBtn: { background: "#171714", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 9, padding: "9px 16px", fontSize: 14 },
-  subtleCenter: { textAlign: "center", color: "#9e978a", margin: "8px 0 20px", fontSize: 13 },
-  bigBtn: { background: "#171714", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 9, padding: 13, fontWeight: 750 },
-  bigOn: { background: "linear-gradient(135deg,#d3b066,#9f7a35)", borderColor: "#d6ba79", color: "#0b0b0a" },
-  hint: { color: "#9e978a", fontSize: 12, lineHeight: 1.45 },
-  success: { color: "#9fc79a", fontSize: 12.5, fontWeight: 700 },
-  error: { color: "#efaaa0", fontSize: 12.5 },
-  emberAmount: { color: "#d9b86f", fontSize: 27, fontWeight: 800 },
-  grid3: { display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 12 },
-  mini: { background: "#11110f", border: "1px solid #2b2924", borderRadius: 9, padding: 9, textAlign: "center", display: "grid", gap: 4 },
-  pre: { whiteSpace: "pre-wrap", fontFamily: "Inter,sans-serif", lineHeight: 1.55, color: "#eee9df" },
-  footer: { textAlign: "center", color: "#777166", fontSize: 11, marginTop: 20 },
-  linkBtn: { background: "none", border: 0, color: "#d5b66d", textDecoration: "none", padding: 0 },
-  stats: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(155px,1fr))", gap: 8, marginBottom: 12 },
-  stat: { background: "#151512", border: "1px solid #302e28", borderRadius: 10, padding: "11px 13px" },
-  tabs: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 7, marginBottom: 12, WebkitOverflowScrolling: "touch" },
-  tab: { flex: "0 0 auto", background: "#11110f", border: "1px solid #302e28", color: "#b8b0a2", borderRadius: 8, padding: "7px 12px", fontSize: 12.5 },
-  tabOn: { background: "#d0ad63", borderColor: "#d0ad63", color: "#0c0c0b", fontWeight: 800 },
-  pointTabs: { display: "flex", gap: 6, flexWrap: "wrap", margin: "12px 0" },
-  sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 },
-  row: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#11110f", borderBottom: "1px solid #302e28", padding: "10px 8px", marginBottom: 0 },
-  chip: { background: "#11110f", border: "1px solid #3a372f", color: "#d8d1c5", borderRadius: 7, padding: "5px 9px", fontSize: 12 },
-  chipOn: { background: "#cdaa60", borderColor: "#cdaa60", color: "#0c0c0b", fontWeight: 800 },
-  formGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 9 },
-  field: { color: "#c7c0b4", fontSize: 12, fontWeight: 650 },
-  cashInputRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "9px 3px", borderBottom: "1px solid #302e28" },
-  smallText: { display: "block", color: "#8e887e", fontSize: 11, marginTop: 2 },
-  calendarGrid: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5 },
-  calendarDay: { minHeight: 34, borderRadius: 7, display: "grid", placeItems: "center", background: "#11110f", border: "1px solid #302e28", color: "#ded8ce", fontSize: 11.5 },
-  calendarFull: { background: "#cdaa60", borderColor: "#cdaa60", color: "#0c0c0b" },
-  calendarHalf: { background: "linear-gradient(135deg,#cdaa60 50%,#11110f 50%)" },
-  calendarTraining: { background: "#725f3d" }, calendarOff: { background: "#4a4945" },
-  notice: { background: "#11110f", borderLeft: "3px solid #cdaa60", borderTop: "1px solid #302e28", borderRight: "1px solid #302e28", borderBottom: "1px solid #302e28", borderRadius: 8, padding: 11, marginTop: 7, color: "#eee9df" },
-  badge: { display: "inline-block", background: "#11110f", border: "1px solid #8f743c", color: "#d6bd82", padding: "6px 9px", borderRadius: 7, margin: "3px 5px 3px 0", fontSize: 11.5 },
-  requestRow: { display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderBottom: "1px solid #302e28", color: "#ddd7cd", fontSize: 12 },
-  requestAdmin: { display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#11110f", border: "1px solid #302e28", borderRadius: 8, padding: 11, marginTop: 7 },
-  progress: { height: 8, background: "#0b0b0a", border: "1px solid #302e28", borderRadius: 20, overflow: "hidden", marginTop: 12 },
-  progressBar: { height: "100%", background: "linear-gradient(90deg,#8f6f32,#d5b96f)", borderRadius: 20 },
-  metricRow: { display: "grid", gridTemplateColumns: "1.2fr repeat(3,1fr)", gap: 8, padding: "10px 4px", borderBottom: "1px solid #302e28", color: "#e7e1d7", fontSize: 12.5 },
-  alertRow: { background: "#241b17", border: "1px solid #5b3c2d", color: "#efb6aa", borderRadius: 7, padding: 9, marginTop: 6 },
-  auditRow: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", padding: "9px 3px", borderBottom: "1px solid #302e28", color: "#ddd7cd" },
-  lineRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 3px", borderBottom: "1px solid #302e28", color: "#e7e1d7" },
-  detailBox: { background: "#11110f", color: "#ddd7cd", border: "1px solid #302e28", borderRadius: 7, padding: 9, marginTop: 6, fontSize: 12, lineHeight: 1.45 },
-  savedRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "10px 3px", borderBottom: "1px solid #302e28" },
-  table: { width: "100%", borderCollapse: "collapse", fontSize: 12.5, color: "#e7e1d7" },
-  stickyName: { position: "sticky", left: 0, background: "#151512", whiteSpace: "nowrap", padding: "8px 9px", zIndex: 1, border: "1px solid #302e28" },
-  cell: { width: 20, height: 20, borderRadius: 4, border: "1px solid #464238" },
-  nav: { background: "#11110f", border: "1px solid #3a372f", color: "#d8d1c5", borderRadius: 7, width: 32, height: 32 },
-  formBox: { display: "grid", gap: 8, background: "#11110f", border: "1px solid #302e28", borderRadius: 8, padding: 12, marginBottom: 12 },
-  textarea: { width: "100%", background: "#0e0e0d", border: "1px solid #3a372f", color: "#f8f5ee", borderRadius: 8, padding: 11, fontSize: 13.5, lineHeight: 1.55 },
-  statusPill: { background: "#171714", border: "1px solid #3a372f", color: "#a9a195", borderRadius: 999, padding: "5px 8px", fontSize: 10.5 },
-  recommendationGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 },
-  recommendation: { background: "#11110f", border: "1px solid #302e28", borderRadius: 8, padding: 11, color: "#ddd7cd" },
-  recommendationHigh: { borderLeft: "3px solid #c96f5c" }, recommendationWarning: { borderLeft: "3px solid #c5a45c" }, recommendationSuccess: { borderLeft: "3px solid #7fa279" },
+  page: { minHeight: "100vh", background: "#F5F2EC", color: "#252525", fontFamily: "Manrope,system-ui,sans-serif", padding: "18px 12px 48px" },
+  header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 18, padding: "8px 4px 14px", borderBottom: "1px solid #DDD6CB" },
+  headerSub: { color: "#766F65", fontSize: 12, marginLeft: 60, marginTop: 2 },
+  card: { background: "#FFFFFF", border: "1px solid #DDD6CB", borderRadius: 14, padding: 15, boxShadow: "0 8px 26px rgba(71,59,42,.07)" },
+  h2: { margin: 0, fontFamily: "Playfair Display,serif", fontSize: 20, color: "#252525", fontWeight: 700 },
+  h3: { margin: "0 0 10px", color: "#252525", fontFamily: "Playfair Display,serif", fontSize: 17 },
+  eyebrow: { color: "#A17B3F", fontSize: 10, fontWeight: 800, letterSpacing: ".16em", marginBottom: 4 },
+  label: { color: "#766F65", fontSize: 10.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: ".09em", margin: "12px 0 7px" },
+  input: { background: "#FFFFFF", border: "1px solid #CFC7BA", color: "#252525", borderRadius: 9, padding: "9px 11px", fontSize: 13.5, outline: "none" },
+  inputFull: { width: "100%", background: "#FFFFFF", border: "1px solid #CFC7BA", color: "#252525", borderRadius: 9, padding: "10px 11px", fontSize: 13.5, marginTop: 5 },
+  primary: { background: "#B58742", color: "#FFFFFF", border: "1px solid #A47838", borderRadius: 9, padding: "9px 14px", fontWeight: 800 },
+  ghost: { background: "#FFFFFF", color: "#4D473F", border: "1px solid #CFC7BA", borderRadius: 9, padding: "7px 11px" },
+  loginBtn: { background: "#FFFFFF", border: "1px solid #CFC7BA", color: "#252525", borderRadius: 9, padding: "9px 16px", fontSize: 14 },
+  subtleCenter: { textAlign: "center", color: "#766F65", margin: "8px 0 20px", fontSize: 13 },
+  bigBtn: { background: "#FFFFFF", border: "1px solid #CFC7BA", color: "#252525", borderRadius: 10, padding: 13, fontWeight: 750 },
+  bigOn: { background: "#B58742", borderColor: "#A47838", color: "#FFFFFF" },
+  hint: { color: "#766F65", fontSize: 12, lineHeight: 1.5 }, success: { color: "#4F775D", fontSize: 12.5, fontWeight: 700 }, error: { color: "#B95045", fontSize: 12.5 }, emberAmount: { color: "#9A6A24", fontSize: 27, fontWeight: 800 },
+  grid3: { display: "grid", gridTemplateColumns: "repeat(3,minmax(0,1fr))", gap: 8, marginTop: 12 }, mini: { background: "#FAF8F4", border: "1px solid #DDD6CB", borderRadius: 10, padding: 9, textAlign: "center", display: "grid", gap: 4 }, pre: { whiteSpace: "pre-wrap", fontFamily: "Manrope,sans-serif", lineHeight: 1.55, color: "#4D473F" }, footer: { textAlign: "center", color: "#8C8479", fontSize: 11, marginTop: 20 }, linkBtn: { background: "none", border: 0, color: "#9A6A24", textDecoration: "none", padding: 0 },
+  stats: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(155px,1fr))", gap: 9, marginBottom: 12 }, stat: { background: "#FFFFFF", border: "1px solid #DDD6CB", borderRadius: 12, padding: "12px 14px" }, tabs: { display: "flex", gap: 6, overflowX: "auto", paddingBottom: 7, marginBottom: 12, WebkitOverflowScrolling: "touch" }, tab: { flex: "0 0 auto", background: "#FFFFFF", border: "1px solid #D5CEC3", color: "#665F56", borderRadius: 9, padding: "7px 12px", fontSize: 12.5 }, tabOn: { background: "#B58742", borderColor: "#B58742", color: "#FFFFFF", fontWeight: 800 }, pointTabs: { display: "flex", gap: 6, flexWrap: "wrap", margin: "12px 0" }, sectionHead: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", marginBottom: 10 },
+  row: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 8, flexWrap: "wrap", background: "#FFFFFF", borderBottom: "1px solid #DDD6CB", padding: "10px 8px", marginBottom: 0 }, chip: { background: "#FFFFFF", border: "1px solid #CFC7BA", color: "#665F56", borderRadius: 8, padding: "5px 9px", fontSize: 12 }, chipOn: { background: "#B58742", borderColor: "#B58742", color: "#FFFFFF", fontWeight: 800 }, formGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(210px,1fr))", gap: 9 }, field: { color: "#5F584F", fontSize: 12, fontWeight: 650 }, cashInputRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "9px 3px", borderBottom: "1px solid #DDD6CB" }, smallText: { display: "block", color: "#8C8479", fontSize: 11, marginTop: 2 },
+  calendarGrid: { display: "grid", gridTemplateColumns: "repeat(7,1fr)", gap: 5 }, calendarDay: { minHeight: 34, borderRadius: 7, display: "grid", placeItems: "center", background: "#FFFFFF", border: "1px solid #DDD6CB", color: "#4D473F", fontSize: 11.5 }, calendarFull: { background: "#B58742", borderColor: "#B58742", color: "#FFFFFF" }, calendarHalf: { background: "linear-gradient(135deg,#B58742 50%,#FFFFFF 50%)" }, calendarTraining: { background: "#E7D8BD" }, calendarOff: { background: "#E1DED9" },
+  notice: { background: "#FFFDF9", borderLeft: "3px solid #B58742", borderTop: "1px solid #DDD6CB", borderRight: "1px solid #DDD6CB", borderBottom: "1px solid #DDD6CB", borderRadius: 9, padding: 11, marginTop: 7, color: "#4D473F" }, badge: { display: "inline-block", background: "#F7F1E7", border: "1px solid #D6C198", color: "#825F29", padding: "6px 9px", borderRadius: 8, margin: "3px 5px 3px 0", fontSize: 11.5 }, requestRow: { display: "flex", justifyContent: "space-between", gap: 10, padding: "9px 0", borderBottom: "1px solid #DDD6CB", color: "#4D473F", fontSize: 12 }, requestAdmin: { display: "flex", justifyContent: "space-between", gap: 12, flexWrap: "wrap", background: "#FAF8F4", border: "1px solid #DDD6CB", borderRadius: 9, padding: 11, marginTop: 7 },
+  progress: { height: 9, background: "#EEE9E1", border: "1px solid #DDD6CB", borderRadius: 20, overflow: "hidden", marginTop: 12 }, progressBar: { height: "100%", background: "linear-gradient(90deg,#9D7538,#C7A562)", borderRadius: 20 }, metricRow: { display: "grid", gridTemplateColumns: "1.2fr repeat(3,1fr)", gap: 8, padding: "10px 6px", borderBottom: "1px solid #DDD6CB", color: "#4D473F", fontSize: 12.5 }, alertRow: { background: "#FFF4F0", border: "1px solid #E6BDB4", color: "#A1463D", borderRadius: 8, padding: 9, marginTop: 6 }, auditRow: { display: "flex", justifyContent: "space-between", gap: 10, flexWrap: "wrap", padding: "9px 3px", borderBottom: "1px solid #DDD6CB", color: "#4D473F" }, lineRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, padding: "9px 3px", borderBottom: "1px solid #DDD6CB", color: "#4D473F" }, detailBox: { background: "#FAF8F4", color: "#4D473F", border: "1px solid #DDD6CB", borderRadius: 8, padding: 9, marginTop: 6, fontSize: 12, lineHeight: 1.45 }, savedRow: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, padding: "10px 3px", borderBottom: "1px solid #DDD6CB" }, table: { width: "100%", borderCollapse: "collapse", fontSize: 12.5, color: "#3F3A34" }, stickyName: { position: "sticky", left: 0, background: "#FFFFFF", whiteSpace: "nowrap", padding: "8px 9px", zIndex: 1, border: "1px solid #DDD6CB" }, cell: { width: 20, height: 20, borderRadius: 4, border: "1px solid #BEB6AA" }, nav: { background: "#FFFFFF", border: "1px solid #CFC7BA", color: "#5F584F", borderRadius: 8, width: 32, height: 32 }, formBox: { display: "grid", gap: 8, background: "#FAF8F4", border: "1px solid #DDD6CB", borderRadius: 9, padding: 12, marginBottom: 12 }, textarea: { width: "100%", background: "#FFFFFF", border: "1px solid #CFC7BA", color: "#252525", borderRadius: 9, padding: 11, fontSize: 13.5, lineHeight: 1.55 }, statusPill: { background: "#F2EEE7", border: "1px solid #D6CFC4", color: "#766F65", borderRadius: 999, padding: "5px 8px", fontSize: 10.5 }, statusOk: { background: "#EEF6F0", borderColor: "#B8D1BE", color: "#4F775D" }, recommendationGrid: { display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(220px,1fr))", gap: 8 }, recommendation: { background: "#FAF8F4", border: "1px solid #DDD6CB", borderRadius: 9, padding: 11, color: "#4D473F" }, recommendationHigh: { borderLeft: "3px solid #B95045" }, recommendationWarning: { borderLeft: "3px solid #B58742" }, recommendationSuccess: { borderLeft: "3px solid #4F775D" }, reviewRow: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 12, flexWrap: "wrap", padding: "12px 4px", borderBottom: "1px solid #DDD6CB" }, star: { border: 0, background: "transparent", color: "#D8D0C4", fontSize: 32, padding: 0 }, starOn: { color: "#B58742" }
 };
