@@ -532,7 +532,7 @@ function Shell({ children }) {
   return <div style={S.page}>
     <style>{`
       @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap');
-      *{box-sizing:border-box} html,body,#root{margin:0;min-height:100%;background:#F5F2EC} button,input,textarea,select{font-family:inherit}
+      *{box-sizing:border-box} html,body,#root{margin:0;min-height:100%;background:#F4F7F4!important;background-image:none!important} body::before,body::after,#root::before,#root::after{display:none!important} [style*="background-image"]{background-image:none!important} button,input,textarea,select{font-family:inherit}
       button{cursor:pointer} button:disabled{cursor:not-allowed} input::placeholder,textarea::placeholder{color:#A59D92;opacity:1}
       select option{background:#fff;color:#252525} ::-webkit-scrollbar{height:8px;width:8px} ::-webkit-scrollbar-thumb{background:#CFC7BA;border-radius:5px}
       table{border-collapse:collapse!important} th,td{border:1px solid #DDD6CB!important;padding:8px 9px!important} th{background:#F0ECE5;color:#4D473F;font-weight:800}
@@ -547,15 +547,35 @@ function Shell({ children }) {
 }
 function Centered({ children }) { return <div style={{ textAlign: "center", marginTop: 90, color: "#4D473F" }}>{children}</div>; }
 function Brand({ small = false }) {
-  return <div className="brand-lockup" style={{ display: "flex", alignItems: "center", gap: small ? 9 : 12 }}>
-    <div className="brand-mark" style={{ width: small ? 38 : 48, height: small ? 38 : 48 }}>
-      <img src="/polumya-logo.jpeg" alt="Полум’я" />
-    </div>
+  return <div className="brand-lockup" style={{ display: "flex", alignItems: "center", gap: small ? 8 : 10 }}>
+    <div style={{ width: small ? 34 : 42, height: small ? 34 : 42, borderRadius: 12, display: "grid", placeItems: "center", background: "#153C2E", color: "#fff", fontSize: small ? 18 : 22, boxShadow: "0 6px 16px rgba(21,60,46,.16)" }}>🔥</div>
     <div style={{ display: "grid", gap: 1 }}>
-      <span className="brand-name" style={{ fontSize: small ? 18 : 24 }}>ПОЛУМ’Я</span>
-      <span className="brand-caption">PERSONAL · MANAGEMENT</span>
+      <span className="brand-name" style={{ fontSize: small ? 16 : 21 }}>ПОЛУМ’Я</span>
+      <span className="brand-caption">КОМАНДА · УПРАВЛІННЯ</span>
     </div>
   </div>;
+}
+
+function CollapsibleSection({ title, meta, children, defaultOpen = false, compact = false }) {
+  const storageKey = `polumya:section:${title}`;
+  const [open, setOpen] = useState(() => {
+    try {
+      const saved = localStorage.getItem(storageKey);
+      return saved === null ? defaultOpen : saved === "1";
+    } catch { return defaultOpen; }
+  });
+  const toggle = () => {
+    const next = !open;
+    setOpen(next);
+    try { localStorage.setItem(storageKey, next ? "1" : "0"); } catch {}
+  };
+  return <section style={{ ...S.groupCard, ...(compact ? S.groupCardCompact : {}) }}>
+    <button type="button" onClick={toggle} style={S.groupHeader}>
+      <span style={S.groupChevron}>{open ? "⌄" : "›"}</span>
+      <span style={{ minWidth: 0, flex: 1, textAlign: "left" }}><b>{title}</b>{meta && <small style={S.groupMeta}>{meta}</small>}</span>
+    </button>
+    {open && <div style={S.groupBody}>{children}</div>}
+  </section>;
 }
 
 function AuthLogin() {
@@ -979,32 +999,32 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
 
     {tab === "control" && <>
       <div style={S.stats}><Stat title="Не відмітилися сьогодні" value={missingToday.length} ember={missingToday.length>0}/><Stat title="Проблеми в даних" value={anomalies.length}/><Stat title="Прогноз виплат" value={money(forecastPayroll)}/></div>
-      <div style={{ ...S.card, marginBottom: 12 }}>
-        <div style={S.sectionHead}><div><div style={S.eyebrow}>SMART ANALYTICS</div><h2 style={S.h2}>Рекомендації системи</h2></div><span style={S.statusPill}>Оновлено автоматично</span></div>
+      <CollapsibleSection title="Рекомендації системи" meta="Оновлено автоматично" defaultOpen>
         <div style={S.recommendationGrid}>{smartRecommendations.map((item, index) => <div key={`${item.title}-${index}`} style={{ ...S.recommendation, ...(item.level === "high" ? S.recommendationHigh : item.level === "warning" ? S.recommendationWarning : item.level === "success" ? S.recommendationSuccess : {}) }}><b>{item.title}</b><p>{item.text}</p></div>)}</div>
-      </div>
+      </CollapsibleSection>
       <div style={{...S.card,marginBottom:12}}><div style={S.sectionHead}><h2 style={S.h2}>План / факт · {MONTHS[month.getMonth()]}</h2><MonthNav month={month} setMonth={setMonth}/></div><div style={S.progress}><div style={{...S.progressBar,width:`${planProgress}%`}}/></div><p style={S.hint}>{money(monthTotalCash)} із {monthPlan?money(monthPlan):"план не задано"} · {fmt(planProgress)}%</p><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input style={S.input} type="number" placeholder="Місячний план" value={planDraft} onChange={e=>setPlanDraft(e.target.value)}/><button style={S.primary} onClick={saveMonthPlan}>Зберегти план</button><button style={S.ghost} onClick={toggleMonthClose}>{monthClosed?"Відкрити місяць":"Закрити місяць"}</button></div></div>
       <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Порівняння об’єктів</h2>{pointComparison.map(x=><div key={x.point} style={S.metricRow}><b>{x.point}</b><span>Каса {money(x.cash)}</span><span>% {money(x.percent)}</span><span>Працівників {x.workers}</span></div>)}</div>
-      <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Хто не відмітився сьогодні</h2>{missingToday.length?missingToday.map(p=><div style={S.lineRow} key={p.id}><span>{p.name}<small style={S.smallText}>{p.point} · {p.profession}</small></span><button style={S.ghost} onClick={()=>writeShift(todayKey,p.id,"off")}>Поставити вихідний</button></div>):<p style={S.success}>✓ Усі відмітилися</p>}</div>
-      <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Перевірка даних</h2>{anomalies.length?anomalies.slice(0,20).map(x=><div key={x} style={S.alertRow}>⚠ {x}</div>):<p style={S.success}>✓ Критичних помилок не знайдено</p>}</div>
+      <CollapsibleSection title="Хто не відмітився сьогодні" meta={`${missingToday.length} працівників`} defaultOpen={missingToday.length > 0}>{missingToday.length?missingToday.map(p=><div style={S.lineRow} key={p.id}><span>{p.name}<small style={S.smallText}>{p.point} · {p.profession}</small></span><button style={S.ghost} onClick={()=>writeShift(todayKey,p.id,"off")}>Вихідний</button></div>):<p style={S.success}>✓ Усі відмітилися</p>}</CollapsibleSection>
+      <CollapsibleSection title="Перевірка даних" meta={`${anomalies.length} проблем`} defaultOpen={anomalies.length > 0}>{anomalies.length?anomalies.slice(0,20).map(x=><div key={x} style={S.alertRow}>⚠ {x}</div>):<p style={S.success}>✓ Критичних помилок не знайдено</p>}</CollapsibleSection>
       <div style={{...S.card,marginBottom:12}}><h2 style={S.h2}>Масова дія</h2><div style={{display:"flex",gap:8,flexWrap:"wrap"}}><input style={S.input} type="date" value={selectedDay} onChange={e=>setSelectedDay(e.target.value)}/><select style={S.input} value={massPoint} onChange={e=>setMassPoint(e.target.value)}>{POINTS.map(p=><option key={p}>{p}</option>)}</select><select style={S.input} value={massStatus} onChange={e=>setMassStatus(e.target.value)}><option value="off">Вихідний</option><option value="training">Стажування</option><option value="1">Повна</option><option value="0.5">Пів зміни</option></select><button style={S.primary} onClick={applyMassStatus}>Застосувати всім</button></div></div>
-      <div style={S.card}><h2 style={S.h2}>Журнал адміністратора</h2>{(audit||[]).slice().reverse().slice(0,30).map(a=><div key={a.id} style={S.auditRow}><span><b>{a.action}</b><small style={S.smallText}>{a.details}</small></span><small>{new Date(a.ts).toLocaleString("uk-UA")} · {a.admin}</small></div>)}</div>
+      <CollapsibleSection title="Журнал адміністратора" meta="Останні 30 дій"><div style={{maxHeight:420,overflowY:"auto"}}>{(audit||[]).slice().reverse().slice(0,30).map(a=><div key={a.id} style={S.auditRow}><span><b>{a.action}</b><small style={S.smallText}>{a.details}</small></span><small>{new Date(a.ts).toLocaleString("uk-UA")} · {a.admin}</small></div>)}</div></CollapsibleSection>
     </>}
 
     {tab === "day" && <div style={S.card}>
       <div style={S.sectionHead}><h2 style={S.h2}>Графік на день</h2><input style={S.input} type="date" value={selectedDay} onChange={(e) => setSelectedDay(e.target.value)} /></div>
       {Object.entries(byPointProfession).map(([group, people]) => {
         const [point, profession] = group.split("|");
-        return <section key={group}><div style={S.label}>{point} · {profession}</div>{people.map((p) => {
+        const marked = people.filter((p) => shifts[selectedDay]?.[p.id] !== undefined).length;
+        return <CollapsibleSection key={group} title={`${point} · ${profession}`} meta={`${people.length} · відмічено ${marked}`} defaultOpen={marked < people.length}>{people.map((p) => {
           const value = shifts[selectedDay]?.[p.id];
-          return <div key={p.id} style={{ ...S.row, ...(value !== undefined ? { borderColor: "#B58742" } : {}) }}>
+          return <div key={p.id} style={{ ...S.row, ...(value !== undefined ? { borderColor: "#A9CDB5" } : {}) }}>
             <b>{p.name}</b>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6, alignItems: "center" }}>
               <select style={{ ...S.input, minWidth: 126 }} value={workPointFor(dailyPoints, selectedDay, p)} onChange={(e) => writeDailyPoint(selectedDay, p.id, e.target.value)}>{POINTS.map((point) => <option key={point} value={point}>{point}</option>)}</select>
               {[[1, "Повна"], [0.5, "½"], ["training", "Стажування"], ["off", "Вихідний"]].map(([v, label]) => <button key={String(v)} style={{ ...S.chip, ...(value === v ? S.chipOn : {}) }} onClick={() => writeShift(selectedDay, p.id, value === v ? null : v)}>{label}</button>)}
             </div>
           </div>;
-        })}</section>;
+        })}</CollapsibleSection>;
       })}
     </div>}
 
@@ -1140,7 +1160,18 @@ function AdminView({ me, staff, shifts, cash, payouts, settings, rules, announce
           <input style={S.input} type="password" placeholder={staffForm.id ? "Новий пароль (необов’язково)" : "Тимчасовий пароль"} value={staffForm.password || ""} onChange={(e) => setStaffForm({ ...staffForm, password: e.target.value })} />
         <div><button style={S.primary} onClick={submitStaff}>Зберегти</button> <button style={S.ghost} onClick={() => setStaffForm(null)}>Скасувати</button></div>
       </div>}
-      {POINTS.map((point) => <section key={point}><div style={S.label}>{point}</div>{normalizedStaff.filter((p) => p.point === point).map((p) => <div key={p.id} style={S.row}><span><b>{p.name}</b><small style={S.smallText}>{p.profession} · {p.rate ? `${money(p.rate)}/зміна` : "ставку не задано"}</small></span><span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}><button style={S.ghost} onClick={() => setStaffForm({ ...p, rate: String(p.rate || ""), login: p.login || "", password: "" })}>Змінити</button>{p.authUserId && <button style={S.ghost} onClick={() => resetStaffPassword(p)}>Новий пароль</button>}<button style={{ ...S.ghost, color: "#B95045" }} onClick={() => confirm(`Видалити ${p.name}?`) && saveStaff(normalizedStaff.filter((x) => x.id !== p.id))}>Видалити</button></span></div>)}</section>)}
+      {POINTS.map((point) => {
+        const pointPeople = normalizedStaff.filter((p) => p.point === point);
+        const professions = [...new Set(pointPeople.map((p) => p.profession))];
+        return <CollapsibleSection key={point} title={point} meta={`${pointPeople.length} працівників`} defaultOpen={point === "Полум'я"}>
+          {professions.map((profession) => {
+            const people = pointPeople.filter((p) => p.profession === profession);
+            return <CollapsibleSection key={`${point}-${profession}`} title={profession} meta={`${people.length}`} compact>
+              {people.map((p) => <div key={p.id} style={S.row}><span><b>{p.name}</b><small style={S.smallText}>{p.rate ? `${money(p.rate)}/зміна` : "ставку не задано"}</small></span><span style={{ display: "flex", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}><button style={S.ghost} onClick={() => setStaffForm({ ...p, rate: String(p.rate || ""), login: p.login || "", password: "" })}>Змінити</button>{p.authUserId && <button style={S.ghost} onClick={() => resetStaffPassword(p)}>Пароль</button>}<button style={{ ...S.ghost, color: "#B95045" }} onClick={() => confirm(`Видалити ${p.name}?`) && saveStaff(normalizedStaff.filter((x) => x.id !== p.id))}>Видалити</button></span></div>)}
+            </CollapsibleSection>;
+          })}
+        </CollapsibleSection>;
+      })}
     </div>}
 
     {tab === "rules" && <div style={S.card}><h2 style={S.h2}>Правила</h2><textarea style={S.textarea} rows={16} value={rulesDraft} onChange={(e) => setRulesDraft(e.target.value)} /><button style={{ ...S.primary, marginTop: 10 }} onClick={() => saveRules(rulesDraft)}>Зберегти правила</button></div>}
@@ -1180,7 +1211,7 @@ function GuestReviewPage({ staff }) {
 function ReviewsPanel({ settings, saveSettings, addAudit }) {
   const [reviews, setReviews] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [googleUrl, setGoogleUrl] = useState(settings.googleReviewUrl || "");
+  const [googleUrl, setGoogleUrl] = useState(settings.googleReviewUrl || "https://g.page/r/CeGK7Eafr5bUEBE/review");
   const load = async () => { setLoading(true); const { data } = await supabase.functions.invoke("guest-reviews", { body: { action: "list" } }); setReviews(data?.reviews || []); setLoading(false); };
   useEffect(()=>{ load(); },[]);
   const setStatus = async (id, status) => { await supabase.functions.invoke("guest-reviews", { body: { action: "update", id, status } }); await addAudit("Оновлено статус відгуку", `${id}: ${status}`); load(); };
@@ -1238,10 +1269,16 @@ function Stat({ title, value, ember }) { return <div style={{ ...S.stat, ...(emb
 function Mini({ title, value }) { return <div style={S.mini}><b style={{ fontSize: 20 }}>{value}</b><small style={{ color: "#665F56" }}>{title}</small></div>; }
 
 const S = {
-  page: { minHeight: "100vh", background: "#F6F7F3", color: "#1F2A24", fontFamily: "Inter,system-ui,sans-serif", padding: "14px 10px 42px" },
+  page: { minHeight: "100vh", background: "#F4F7F4", backgroundImage: "none", color: "#193126", fontFamily: "Inter,system-ui,sans-serif", padding: "12px 10px 38px" },
   header: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap", marginBottom: 14, padding: "10px 4px 14px", borderBottom: "1px solid #DDE4DD" },
   headerSub: { color: "#6E7A72", fontSize: 12, marginLeft: 60, marginTop: 2 },
-  card: { background: "#FFFFFF", border: "1px solid #E1E7E1", borderRadius: 18, padding: 14, boxShadow: "0 8px 26px rgba(31,42,36,.06)" },
+  card: { background: "#FFFFFF", border: "1px solid #DCE7DF", borderRadius: 16, padding: 14, boxShadow: "0 6px 20px rgba(31,42,36,.045)" },
+  groupCard: { background: "#FFFFFF", border: "1px solid #DCE7DF", borderRadius: 14, marginBottom: 10, overflow: "hidden", boxShadow: "0 3px 12px rgba(31,42,36,.035)" },
+  groupCardCompact: { margin: "8px 0", borderRadius: 12, boxShadow: "none", background: "#FBFCFB" },
+  groupHeader: { width: "100%", display: "flex", alignItems: "center", gap: 10, padding: "12px 14px", border: 0, background: "transparent", color: "#193126" },
+  groupChevron: { width: 24, height: 24, borderRadius: 8, display: "grid", placeItems: "center", background: "#EAF3ED", color: "#2F6D49", fontSize: 20, lineHeight: 1 },
+  groupMeta: { display: "block", marginTop: 2, color: "#7B8B81", fontWeight: 500, fontSize: 11 },
+  groupBody: { padding: "0 12px 12px" },
   h2: { margin: 0, fontFamily: "Inter,system-ui,sans-serif", fontSize: 19, letterSpacing: "-.02em", color: "#17211B", fontWeight: 800 },
   h3: { margin: "0 0 10px", color: "#17211B", fontFamily: "Inter,system-ui,sans-serif", fontSize: 16 },
   eyebrow: { color: "#B18431", fontSize: 10, fontWeight: 800, letterSpacing: ".16em", marginBottom: 4 },
